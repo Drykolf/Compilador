@@ -376,8 +376,7 @@ class Parser:
 	def consume(self, token_type: str, message: str):
 		if self.match(token_type):
 			return self.tokens[self.current - 1]
-		print(f"ERROR: Token {self.tokens[self.current-1]} : {message}")
-		print(f"ERROR: Token {self.peek()} : {message}")
+		print(f"ERROR: {message}, se encontro: Token {self.peek()}")
 		raise SystemExit()
 
 # Convertir el AST a una representación JSON para mejor visualización

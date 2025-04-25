@@ -27,6 +27,7 @@ def compile(file):
         checker = Checker()  # Crear el verificador semántico
         systab = checker.check(ast_data)  # Perform semantic checks
     except Exception as e:
+        print(f"{e}")
         return
     systab.print()  # Print the symbol table
 

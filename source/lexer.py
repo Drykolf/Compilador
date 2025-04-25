@@ -57,6 +57,7 @@ class Token:
 class Lexer:
     def __init__(self, debug=False):
         self.debug = debug
+        self.hasErrors = False
         
     def scan(self, text):
         index = 0 #indice de texto
@@ -75,8 +76,7 @@ class Lexer:
                 index = text.find("*/", index)
                 if index == -1:
                     print(f"ERROR: COMENTARIO NO TERMINADO EN LINEA {lineno}")
-                    raise SystemExit()
-                    yield Token("ERROR", "COMENTARIO NO TERMINADO", lineno)
+                    self.hasErrors = True
                     break
                 lineno += text[start:index].count("\n")
                 index += 2
@@ -113,8 +113,7 @@ class Lexer:
                     continue
                 else:
                     print(f"ERROR: Caracter invalido '{text[index]}' en linea {lineno}")
-                    raise SystemExit()
-                    #yield Token("ERROR", text[index], lineno)
+                    self.hasErrors = True
                     index += 1
             elif text[index] in "+-*/<=>!&|^;(){},`!":  # operadores y simbolos
                 start = index
@@ -127,32 +126,16 @@ class Lexer:
                 continue
             else:
                 print(f"ERROR: Caracter invalido '{text[index]}' en linea {lineno}")
-                raise SystemExit()
-                #yield Token("ERROR", text[index], lineno)
+                self.hasErrors = True
                 index += 1
+
     def tokenize(self, text):
         #scanner = re.Scanner(self.tokens)
-        raw = self.scan(text)
-        results = list(raw)
-        return results
-    def peek(self):
-        """Returns the next token without advancing the iterator."""
         try:
-            return next(self.tokens)  # Get the next token
-        except StopIteration:
-            return None             # Return None if there are no more tokens
-
-
-#-----------------------TESTING-----------------------  
-def main(argv):
-    lex = Lexer()
-    if len(argv) != 2:
-        raise SystemExit(f"Usage python lex.py <input_file>")
-    with open(argv[1], "r") as sourceFile:
-        for tok in lex.tokenize(sourceFile.read()):#.splitlines()):
-            print(tok)
-
-if __name__ == "__main__":
-    import sys
-    #print(PATTERNS)
-    main(sys.argv)
+            raw = self.scan(text)
+            results = list(raw)
+            if self.hasErrors:
+                raise SyntaxError("Errores lexicos encontrados!")
+            return results
+        except SyntaxError as e:
+            raise SyntaxError(e)

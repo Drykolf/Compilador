@@ -84,7 +84,7 @@ class Symtab:
 		for k,v in self.entries.items():
 			value = f"{v.__class__.__name__}({k})"
 			table.add_row(k, value)
-		print(table, '\n')
+		if len(self.entries)>0:print(table, '\n')
 		
 		for child in self.children:
 			child.print()

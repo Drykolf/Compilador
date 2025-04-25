@@ -1,3 +1,2 @@
-x = 3;
-var addr int = 'a';
-`addr = '\xff';
+
+var z int;

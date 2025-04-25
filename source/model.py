@@ -61,12 +61,13 @@ Original file is located at
 
 from dataclasses import dataclass, field
 from typing      import List
-DEBUG = True
+DEBUG = False
 class Visitor(metaclass=type):  # Replace multimeta with type or define multimeta elsewhere
   pass
 
 @dataclass
 class Node:
+    lineNo: int = 0
     def accept(self, visitor, env):
         if DEBUG: print(f"Visitando {self.__class__.__name__} ")
         return visitor.visit(self, env)
