@@ -1,0 +1,54 @@
+{
+    "stmts": [
+        {
+            "definition": "Variable",
+            "is_const": false,
+            "name": "x",
+            "type": "int",
+            "value": {
+                "definition": "UnaryOp",
+                "operator": "^",
+                "operand": {
+                    "definition": "Integer",
+                    "value": "8192"
+                }
+            }
+        },
+        {
+            "definition": "Variable",
+            "is_const": false,
+            "name": "addr",
+            "type": "int",
+            "value": {
+                "definition": "Integer",
+                "value": "1234"
+            }
+        },
+        {
+            "definition": "Assignment",
+            "location": {
+                "definition": "NamedLocation",
+                "name": "addr"
+            },
+            "expression": {
+                "definition": "Integer",
+                "value": "5678"
+            }
+        },
+        {
+            "definition": "Print",
+            "expr": {
+                "definition": "BinOp",
+                "operator": "+",
+                "left": {
+                    "definition": "NamedLocation",
+                    "name": "addr"
+                },
+                "right": {
+                    "definition": "Integer",
+                    "value": "8"
+                }
+            }
+        }
+    ]
+}
