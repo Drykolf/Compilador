@@ -1,2 +1,13 @@
+ const pi = 3.14159;
+const r = 2.0;
+print pi*r*r;
 
-var z int;
+func fact(n int) int {
+        var result int = 1;
+        var x int = 1;
+        while x <= n {
+            result = result * x;
+            x = x + 1;
+        }
+		return result;
+     }

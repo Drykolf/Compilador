@@ -62,4 +62,3 @@ func u(int x) int {
     // Missing return for alternative branch
 }
 
-

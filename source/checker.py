@@ -33,7 +33,7 @@ class Checker():
 		if check.hasErrors:
 			raise SyntaxError("Errores semánticos encontrados!!")
 		else:
-			print("El programa es semánticamente correcto.")
+			#print("El programa es semánticamente correcto.")
 			return env
 
 	@singledispatchmethod
@@ -45,7 +45,7 @@ class Checker():
 		'''
 		1. recorrer la lista de elementos
 		'''
-		print(f"Visitando nodo Program con {len(n.stmts)} declaraciones")
+		#print(f"Visitando nodo Program con {len(n.stmts)} declaraciones")
 		for stmt in n.stmts:
 			stmt.accept(self, env)
 

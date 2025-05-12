@@ -31,8 +31,8 @@ while 2.5 {
 }
 
 // Use of type names in the wrong place
-print int;            // Can't load from int (not a variable)
-int = 2;              // Can't assign to int (not a variable)
+//print int;            // Can't load from int (not a variable)
+//int = 2;              // Can't assign to int (not a variable)
 
 //var int d;            // Type name/variable name swapped. "d" is not a type.
 

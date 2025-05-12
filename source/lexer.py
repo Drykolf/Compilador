@@ -108,7 +108,8 @@ class Lexer:
             elif text[index] == "'":  # Literales de caracter
                 match = CHAR_PATTERN.match(text, index)
                 if match:
-                    yield Token("CHAR", match.group(), lineno)
+                    char_value = self.process_char_literal(match.group())
+                    yield Token("CHAR", char_value, lineno)
                     index = match.end()
                     continue
                 else:
@@ -128,7 +129,29 @@ class Lexer:
                 print(f"ERROR: Caracter invalido '{text[index]}' en linea {lineno}")
                 self.hasErrors = True
                 index += 1
-
+                
+    def process_char_literal(self, char_literal):
+        """Convert a character literal string to the actual character it represents"""
+        # Remove surrounding quotes
+        content = char_literal[1:-1]
+        # Handle hex escape sequences
+        if content.startswith('\\x'):
+            hex_value = content[2:]
+            return chr(int(hex_value, 16))
+        # Handle other escape sequences
+        if content.startswith('\\'):
+            escape_map = {
+                '\\n': '\n',
+                '\\t': '\t',
+                '\\r': '\r',
+                '\\\\': '\\',
+                '\\"': '"',
+                "\\'": "'"
+            }
+            return escape_map.get(content, content[1])
+        # Regular character
+        return content
+    
     def tokenize(self, text):
         #scanner = re.Scanner(self.tokens)
         try:
