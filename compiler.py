@@ -27,6 +27,7 @@ def compile(file):
     #print(fileTokens)
     parser = Parser(fileTokens, DEBUG)
     top = parser.parse()  # Devuelve directamente el AST como un Program -> lista de statements
+    print(top.stmts)  # Imprimir el AST
     checker = Checker()  # Crear el verificador semántico
     systab = checker.check(top)  # Perform semantic checks
     #systab.print()  # Print the symbol table
@@ -41,7 +42,7 @@ def compile(file):
 def debug():
     # Debugging function to check the output of the main function
     print("Debugging...")
-    file = 'tests/mandelplot.gox'
+    file = 'tests/criba.gox'
     compile(file)
 
 if __name__ == '__main__':

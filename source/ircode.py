@@ -577,7 +577,7 @@ class IRCode(Visitor):
 					func.append(('POKEF',))
 				elif _type == 'char':
 					func.append(('POKEB',))
-				return
+				return "float" if _type == 'F' else "int"
 		except AttributeError:
 			pass
 		# Visitar n.address
@@ -588,5 +588,6 @@ class IRCode(Visitor):
 			func.append(('PEEKF',))
 		elif _type == 'char':
 			func.append(('PEEKB',))
+		return "float" if _type == 'F' else "int"
 
 

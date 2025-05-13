@@ -348,7 +348,12 @@ class Parser:
 		if self.match("ID"):
 			return NamedLocation(self.tokens[self.current - 1].value)
 		elif self.match("DEREF"):
-			expr = self.expression()
+			if self.peek() and self.peek().type == "LPAREN":
+				self.consume("LPAREN", "Se esperaba '(' después de la expresión")
+				expr = self.expression()
+				self.consume("RPAREN", "Se esperaba ')' después de la expresión")
+			else:
+				expr = self.consume("ID", "Se esperaba un identificador después de '`'").value
 			return MemoryLocation(expr)
 		else:
 			print(f"ERROR: {self.peek()}")
