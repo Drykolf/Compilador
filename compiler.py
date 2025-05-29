@@ -21,23 +21,23 @@ def main():
 def compile(file):
     content = read_file(file)# Leer el archivo de entrada
     
-    #try:
-    lex = Lexer(DEBUG)# Crear el analizador lexico
-    fileTokens = lex.tokenize(content)
-    #print(fileTokens)
-    parser = Parser(fileTokens, DEBUG)
-    top = parser.parse()  # Devuelve directamente el AST como un Program -> lista de statements
-    print(top.stmts)  # Imprimir el AST
-    checker = Checker()  # Crear el verificador semántico
-    systab = checker.check(top)  # Perform semantic checks
-    #systab.print()  # Print the symbol table
-    irCoder = IRCode()  # Crear el generador de código intermedio
-    statements = top.stmts  # Convertir a lista de statements
-    module = irCoder.gencode(statements)
-    #print(statements)
-    module.dump()
-    #except Exception as e:
-     #   print(f"{e}")
+    try:
+        lex = Lexer(DEBUG)# Crear el analizador lexico
+        fileTokens = lex.tokenize(content)
+        #print(fileTokens)
+        parser = Parser(fileTokens, DEBUG)
+        top = parser.parse()  # Devuelve directamente el AST como un Program -> lista de statements
+        print(top.stmts)  # Imprimir el AST
+        checker = Checker()  # Crear el verificador semántico
+        systab = checker.check(top)  # Perform semantic checks
+        #systab.print()  # Print the symbol table
+        irCoder = IRCode()  # Crear el generador de código intermedio
+        statements = top.stmts  # Convertir a lista de statements
+        module = irCoder.gencode(statements)
+        #print(statements)
+        module.dump()
+    except Exception as e:
+       print(f"{e}")
     
 def debug():
     # Debugging function to check the output of the main function
