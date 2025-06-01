@@ -95,6 +95,21 @@ from source.model import (
     Break, Continue, Return, Print, If, While, 
     Function, Parameter, FunctionCall, Program,
 )
+import json,os
+# Load configuration
+def load_config():
+    config_path = os.path.join(os.path.dirname(__file__), '..', 'settings', 'config.json')
+    try:
+        with open(config_path, 'r') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        print("Warning: config.json not found, using default settings")
+        return {"Debug": False, "GenerateOutputFile": False}
+    except json.JSONDecodeError:
+        print("Warning: Invalid JSON in config.json, using default settings")
+        return {"Debug": False, "GenerateOutputFile": False}
+CONFIG = load_config()# Global configuration
+# -------------------------------
 @dataclass
 class Token:
 	type  : str
@@ -104,17 +119,25 @@ class Token:
 # Implementación del Parser
 # -------------------------------
 class Parser:
-	def __init__(self, tokens: List[Token], debug: bool = False):
-		self.debug = debug
+	def __init__(self, tokens: List[Token], fileName: str):
 		self.tokens = tokens
 		self.current = 0
+		self.fileName = fileName
+		self.debug = CONFIG.get("Debug", False)
+		self.createOutputFile = CONFIG.get("GenerateOutputFile", False)
 
 	def parse(self) -> Program:
 		statements = []
+		if self.debug:
+			print(f"[bold green][DEBUG][/bold green] Iniciando analisis sintactico del archivo file: {self.fileName}")
 		while self.peek() and self.peek().type != "EOF":
 			statements.append(self.statement())
 		if self.debug:
-			print(statements)
+			print(f"[bold green][DEBUG][/bold green] Analisis sintactico completado. Se procesaron {len(statements)} declaraciones.")
+		if self.createOutputFile:
+			ast_file_path = os.path.join(os.path.dirname(__file__), '..', 'output',f'{self.fileName}' , f'{self.fileName}_ast.json')# Guardar el AST como JSON
+			ASTSerializer.save_ast_to_json(statements, ast_file_path)
+			print(f"[bold blue][OUTPUT][/bold blue] AST saved to: {ast_file_path}")
 		return Program(statements)
 
 	# -------------------------------
@@ -353,7 +376,7 @@ class Parser:
 				expr = self.expression()
 				self.consume("RPAREN", "Se esperaba ')' después de la expresión")
 			else:
-				expr = self.consume("ID", "Se esperaba un identificador después de '`'").value
+				expr = NamedLocation(self.consume("ID", "Se esperaba un identificador después de '`'").value)
 			return MemoryLocation(expr)
 		else:
 			print(f"ERROR: {self.peek()}")
@@ -402,108 +425,4 @@ class ASTSerializer:
 		with open(file_path, "w", encoding="utf-8") as f:
 			f.write(ast_json)
 		return file_path
-
-
-# -------------------------------
-# Prueba del Parser con Tokens
-# -------------------------------
-testTokens = [
-	Token('FUNC', 'func', 1),
-	Token('ID', 'main', 1),
-	Token('LPAREN', '(', 1),
-	Token('ID', 'abc', 1),
-	Token('TYPE', 'int', 1),
-	Token('RPAREN', ')', 1),
-	Token('LBRACE', '{', 1),
-	Token('PRINT', 'print', 3),
-	Token('LPAREN', '(', 3),
-	Token('CHAR', "'a'", 3),
-	Token('RPAREN', ')', 3),
-	Token('SEMICOLON', ';', 3),
-	Token('RBRACE', '}', 22)
-]
-testTokens2 = [
-	Token(type='VAR', value='var', lineno=1),
-	Token(type='ID', value='x', lineno=1),
-	Token(type='TYPE', value='int', lineno=1),
-	Token(type='ASSIGN', value='=', lineno=1),
-	Token(type='CARET', value='^', lineno=1),
-	Token(type='INTEGER', value='8192', lineno=1),
-	Token(type='SEMICOLON', value=';', lineno=1),
-	Token(type='VAR', value='var', lineno=2),
-	Token(type='ID', value='addr', lineno=2),
-	Token(type='TYPE', value='int', lineno=2),
-	Token(type='ASSIGN', value='=', lineno=2),
-	Token(type='INTEGER', value='1234', lineno=2),
-	Token(type='SEMICOLON', value=';', lineno=2),
-	Token(type='DEREF', value='`', lineno=3),
-	Token(type='ID', value='addr', lineno=3),
-	Token(type='ASSIGN', value='=', lineno=3),
-	Token(type='INTEGER', value='5678', lineno=3),
-	Token(type='SEMICOLON', value=';', lineno=3),
-	Token(type='PRINT', value='print', lineno=4),
-	Token(type='LPAREN', value='(', lineno=4),
-	Token(type='DEREF', value='`', lineno=4),
-	Token(type='ID', value='addr', lineno=4),
-	Token(type='PLUS', value='+', lineno=4),
-	Token(type='INTEGER', value='8', lineno=4),
-	Token(type='RPAREN', value=')', lineno=4),
-	Token(type='SEMICOLON', value=';', lineno=4),
-]
-
-def parser_test():
-	parser = Parser(testTokens2)
-	ast = parser.parse()
-	# Guardar el AST como JSON
-	ast_file_path = ASTSerializer.save_ast_to_json(ast)
-	return ast_file_path
-
-def parse_text(content):
-	# Crear el analizador lexico
-	from lexer import Lexer
-	lex = Lexer()
-	# Leer el archivo de entrada
-	fileTokens = lex.tokenize(content)
-	parser = Parser(fileTokens)
-	ast = parser.parse()
-	# Guardar el AST como JSON
-	ast_file_path = ASTSerializer.save_ast_to_json(ast)
-	return ast_file_path
-
-def parse(file_path):
-	# Crear el analizador lexico
-	from lexer import Lexer
-	lex = Lexer()
-	# Leer el archivo de entrada
-	with open(file_path, "r", encoding="utf-8") as file:
-		content = file.read()
-	fileTokens = lex.tokenize(content)
-	parser = Parser(fileTokens)
-	ast_data = parser.parse()  # Devuelve directamente el AST como una lista de objetos
-	return ast_data
-
-def parse_file(file_path):
-	# Crear el analizador lexico
-	from lexer import Lexer
-	lex = Lexer()
-	# Leer el archivo de entrada
-	with open(file_path, "r", encoding="utf-8") as file:
-		content = file.read()
-	fileTokens = lex.tokenize(content)
-	parser = Parser(fileTokens)
-	ast = parser.parse()
-	# Guardar el AST como JSON
-	ast_file_path = ASTSerializer.save_ast_to_json(ast, file_path.replace(".gox", "_ast.json"))
-	return ast_file_path
-
-def main(argv):
-	if len(argv) != 2:
-		raise SystemExit(f"Usage py parser.py <input_file>")
-	file_path = argv[1]
-	ast_file_path = parse_file(file_path)
-
-if __name__ == "__main__":
-	import sys
-	parser_test()
-	#main(sys.argv)
 

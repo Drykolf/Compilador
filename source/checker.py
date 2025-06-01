@@ -15,25 +15,52 @@ from functools import singledispatchmethod
 from source.model   import *
 from source.symtab  import Symtab
 from source.typesys import typenames, check_binop, check_unaryop
-
+import json,os
+# Load configuration
+def load_config():
+    config_path = os.path.join(os.path.dirname(__file__), '..', 'settings', 'config.json')
+    try:
+        with open(config_path, 'r') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        print("Warning: config.json not found, using default settings")
+        return {"Debug": False, "GenerateOutputFile": False}
+    except json.JSONDecodeError:
+        print("Warning: Invalid JSON in config.json, using default settings")
+        return {"Debug": False, "GenerateOutputFile": False}
+CONFIG = load_config()# Global configuration
+# -------------------------------
 
 class Checker():
 	def __init__(self):
 		self.hasErrors = False
+		self.debug = CONFIG.get("Debug", False)
+		self.createOutputFile = CONFIG.get("GenerateOutputFile", False)
 
 	@classmethod
-	def check(cls, n:Node):
+	def check(cls, n:Node, fileName:str):
 		'''
 		1. Crear una nueva tabla de simbolos
 		2. Visitar todas las declaraciones
 		'''
 		check = cls()
+		check.fileName = fileName
+		if check.debug:
+			print(f"[bold green][DEBUG][/bold green] Iniciando análisis semántico del archivo '{fileName}'.")
 		env = Symtab("")
 		n.accept(check, env)  # No es necesario pasar la lista de errores
 		if check.hasErrors:
 			raise SyntaxError("Errores semánticos encontrados!!")
 		else:
-			#print("El programa es semánticamente correcto.")
+			if check.debug:
+				print(f"[bold green][DEBUG][/bold green] Análisis semántico completado sin errores.")
+			if check.createOutputFile:
+				output_file_json = os.path.join(os.path.dirname(__file__), '..', 'output',f"{fileName}", f"{fileName}_symtab.json")
+				output_file = os.path.join(os.path.dirname(__file__), '..', 'output',f"{fileName}", f"{fileName}_symtab.txt")
+				env.save_to_text_file(output_file)
+				with open(output_file_json, 'w') as f:
+					json.dump(env.to_dict(), f, indent=4)
+				print(f"[bold blue][OUTPUT][/bold blue] Tabla de símbolos guardada en: {output_file_json}")
 			return env
 
 	@singledispatchmethod

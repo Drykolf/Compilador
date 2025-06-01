@@ -5,6 +5,23 @@
 import re
 from rich import print
 from dataclasses import dataclass
+import json
+import os
+
+# Load configuration
+def load_config():
+    config_path = os.path.join(os.path.dirname(__file__), '..', 'settings', 'config.json')
+    try:
+        with open(config_path, 'r') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        print("Warning: config.json not found, using default settings")
+        return {"Debug": False, "GenerateOutputFile": False}
+    except json.JSONDecodeError:
+        print("Warning: Invalid JSON in config.json, using default settings")
+        return {"Debug": False, "GenerateOutputFile": False}
+
+CONFIG = load_config()# Global configuration
 KEYWORDS = {"const": "CONST",
             "var": "VAR",
             "print": "PRINT",
@@ -55,11 +72,15 @@ class Token:
   lineno: int = 1
 
 class Lexer:
-    def __init__(self, debug=False):
-        self.debug = debug
+    def __init__(self, fileName: str):
+        self.fileName = fileName
         self.hasErrors = False
-        
+        self.debug = CONFIG.get("Debug", False)
+        self.createOutputFile = CONFIG.get("GenerateOutputFile", False)
+
     def scan(self, text):
+        if self.debug:
+            print(f"[bold green][DEBUG][/bold green] Iniciando análisis lexico de {len(text)} caracteres")
         index = 0 #indice de texto
         lineno = 1 #contador de linea
         while index < len(text):
@@ -159,6 +180,13 @@ class Lexer:
             results = list(raw)
             if self.hasErrors:
                 raise SyntaxError("Errores lexicos encontrados!")
+            if self.debug:
+                print(f"[bold green][DEBUG][/bold green] Análisis lexico completado con {len(results)} tokens")
+            if self.createOutputFile:
+                output_path = os.path.join(os.path.dirname(__file__), '..', 'output',f'{self.fileName}' , 'tokens.json')
+                with open(output_path, 'w') as f:
+                    json.dump([token.__dict__ for token in results], f, indent=4)
+                print(f"[bold blue][OUTPUT][/bold blue] Tokens written to {output_path}")
             return results
         except SyntaxError as e:
             raise SyntaxError(e)

@@ -199,7 +199,21 @@ from functools import singledispatchmethod
 from source.model  import *
 from source.symtab import Symtab
 from source.typesys import typenames, check_binop, check_unaryop
-
+import json,os
+# Load configuration
+def load_config():
+    config_path = os.path.join(os.path.dirname(__file__), '..', 'settings', 'config.json')
+    try:
+        with open(config_path, 'r') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        print("Warning: config.json not found, using default settings")
+        return {"Debug": False, "GenerateOutputFile": False}
+    except json.JSONDecodeError:
+        print("Warning: Invalid JSON in config.json, using default settings")
+        return {"Debug": False, "GenerateOutputFile": False}
+CONFIG = load_config()# Global configuration
+# -------------------------------
 # Todo el código IR se empaquetará en un módulo. Un 
 # módulo es un conjunto de funciones.
 
@@ -320,7 +334,7 @@ class IRCode(Visitor):
 	}
 
 	@classmethod
-	def gencode(cls, node:List[Statement]):
+	def gencode(cls, node:List[Statement], fileName:str):
 		'''
 		El nodo es el nodo superior del árbol de 
 		modelo/análisis.
@@ -328,19 +342,40 @@ class IRCode(Visitor):
 		argumentos. Devuelve un entero.
 		'''
 		ircode = cls()
+		ircode.debug = CONFIG.get("Debug", False)
+		ircode.createOutputFile = CONFIG.get("GenerateOutputFile", False)
+		ircode.module = IRModule()
 
-		cls.module = IRModule()
-
-		func = IRFunction(cls.module, 'main', [], [], 'I')
+		func = IRFunction(ircode.module, 'main', [], [], 'I')
 		# Then process statements in main function
+		if ircode.debug:
+			print(f"[bold green][DEBUG][/bold green] Iniciando generacion de codigo intermedio del archivo: {fileName}")
 		for item in node:
 			item.accept(ircode, func)
-		if '_actual_main' in cls.module.functions:
+		if '_actual_main' in ircode.module.functions:
 			func.append(('CALL', '_actual_main'))
 		else:
 			func.append(('CONSTI', 0))
 		func.append(('RET',))
-		return cls.module
+		if ircode.debug:
+			print(f"[bold green][DEBUG][/bold green] Generacion de codigo intermedio finalizada con {len(func.code)} instrucciones")
+		if ircode.createOutputFile:
+			# Guardar el código IR en un archivo
+			output_file = os.path.join(os.path.dirname(__file__), '..', 'output',f'{fileName}', f'{fileName}.ir')
+			with open(output_file, 'w') as f:
+				# Write MODULE header
+				f.write("MODULE:::\n")
+				# Write globals
+				for glob in ircode.module.globals.values():
+					f.write(f"GLOBAL::: {glob.name}: {glob.type}\n")
+				# Write functions
+				for func_obj in ircode.module.functions.values():
+					f.write(f"FUNCTION::: {func_obj.name}, {func_obj.parmnames}, {func_obj.parmtypes} {func_obj.return_type}\n")
+					f.write(f"locals: {func_obj.locals}\n")
+					for instr in func_obj.code:
+						f.write(f"{instr}\n")
+			print(f"[bold blue][OUTPUT][/bold blue] Código IR guardado en: {output_file}")
+		return ircode.module
 
 	# --- Statements
 	@singledispatchmethod

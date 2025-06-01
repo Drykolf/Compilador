@@ -89,3 +89,68 @@ class Symtab:
 		for child in self.children:
 			child.print()
 
+	def save_to_text_file(self, file_path):
+		"""
+		Guarda la representación de la tabla de símbolos en un archivo de texto
+		"""
+		with open(file_path, 'w', encoding='utf-8') as f:
+			console = Console(file=f, width=120, legacy_windows=False)
+			self._print_to_console(console)
+
+	def _print_to_console(self, console):
+		"""
+		Método auxiliar para imprimir usando un console específico
+		"""
+		table = Table(title=f"Symbol Table: '{self.name}'")
+		table.add_column('key', style='cyan')
+		table.add_column('value', style='bright_green')
+		
+		for k, v in self.entries.items():
+			value = f"{v.__class__.__name__}({k})"
+			table.add_row(k, value)
+		
+		if len(self.entries) > 0:
+			console.print(table)
+			console.print()  # Línea en blanco
+		
+		for child in self.children:
+			child._print_to_console(console)
+
+	def to_dict(self):
+		'''
+		Convierte la tabla de símbolos a un diccionario serializable para JSON
+		'''
+		result = {
+			'name': self.name,
+			'owner': self.owner.__class__.__name__ if self.owner else None,
+			'entries': {},
+			'children': []
+		}
+
+		# Convertir las entradas
+		for k, v in self.entries.items():
+			entry_info = {
+				'type': v.__class__.__name__,
+				'name': k
+			}
+			
+			# Agregar información específica según el tipo
+			if hasattr(v, 'type'):
+				entry_info['data_type'] = v.type
+			if hasattr(v, 'is_const'):
+				entry_info['is_const'] = v.is_const
+			if hasattr(v, 'func_type'):
+				entry_info['func_type'] = v.func_type
+			if hasattr(v, 'params'):
+				entry_info['params'] = [{'name': p.name, 'type': p.type} for p in v.params]
+			if hasattr(v, 'value') and v.value is not None:
+				entry_info['value'] = str(v.value)
+				
+			result['entries'][k] = entry_info
+
+		# Convertir las tablas hijas recursivamente
+		for child in self.children:
+			result['children'].append(child.to_dict())
+
+		return result
+

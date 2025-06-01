@@ -3,8 +3,23 @@ from source.checker import Checker
 from source.lexer import Lexer
 from source.ircode import IRCode
 from rich import print
+import json,os
 
-DEBUG = False
+# Load configuration
+def load_config():
+    config_path = os.path.join(os.path.dirname(__file__), 'settings', 'config.json')
+    try:
+        with open(config_path, 'r') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        print("Warning: config.json not found, using default settings")
+        return {"Debug": False, "GenerateOutputFile": False}
+    except json.JSONDecodeError:
+        print("Warning: Invalid JSON in config.json, using default settings")
+        return {"Debug": False, "GenerateOutputFile": False}
+
+CONFIG = load_config()# Global configuration
+
 def read_file(file_path):
     """Read the content of a file and return it as a string."""
     with open(file_path, 'r', encoding='utf-8') as file:
@@ -18,31 +33,38 @@ def main():
     file = sys.argv[1]
     compile(file)
 
+def create_output_directory(filePath):
+    """Create an output directory based on the file name."""
+    fileName = filePath.split('/')[-1].split('\\')[-1].split('.')[0]
+    if CONFIG.get("GenerateOutputFile", False):
+        output_dir = os.path.join(os.path.dirname(__file__), 'output', fileName)
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+    return fileName
+
 def compile(file):
+    debug = CONFIG.get("Debug", False)
     content = read_file(file)# Leer el archivo de entrada
-    
+    fileName = create_output_directory(file)  # Crear el directorio de salida si es necesario
     try:
-        lex = Lexer(DEBUG)# Crear el analizador lexico
+        lex = Lexer(fileName)# Crear el analizador lexico
         fileTokens = lex.tokenize(content)
-        #print(fileTokens)
-        parser = Parser(fileTokens, DEBUG)
+        if debug: print(fileTokens)  # Imprimir los tokens si el modo debug está activado
+        parser = Parser(fileTokens,fileName)
         top = parser.parse()  # Devuelve directamente el AST como un Program -> lista de statements
-        print(top.stmts)  # Imprimir el AST
-        checker = Checker()  # Crear el verificador semántico
-        systab = checker.check(top)  # Perform semantic checks
-        #systab.print()  # Print the symbol table
-        irCoder = IRCode()  # Crear el generador de código intermedio
         statements = top.stmts  # Convertir a lista de statements
-        module = irCoder.gencode(statements)
-        #print(statements)
-        module.dump()
+        if debug: print(statements)  # Imprimir el AST si el modo debug está activado
+        systab = Checker.check(top,fileName)  # Perform semantic checks
+        if debug:systab.print()  # Print the symbol table
+        module = IRCode.gencode(statements, fileName)
+        if debug:module.dump()
     except Exception as e:
-       print(f"{e}")
+        print(f"{e}")
     
 def debug():
     # Debugging function to check the output of the main function
-    print("Debugging...")
-    file = 'tests/criba.gox'
+    print("[bold green][DEBUG][/bold green] Debugging...")
+    file = 'tests/test.gox'
     compile(file)
 
 if __name__ == '__main__':
