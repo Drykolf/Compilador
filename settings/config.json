@@ -1,4 +1,7 @@
 {
     "Debug": false,
-    "GenerateOutputFile": true
+    "GenerateOutputFile": false,
+    "IntSize": 4,
+    "FloatSize": 4,
+    "CharSize": 1
 }

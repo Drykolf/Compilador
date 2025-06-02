@@ -26,3 +26,4 @@ var prime bool = isPrime(fib);
 
 print fib;
 print prime;
+//89, true

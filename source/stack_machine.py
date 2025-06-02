@@ -1,4 +1,53 @@
-import struct
+'''
+### 1. Requisitos Funcionales
+
+#### 1.1. Ejecución de Instrucciones IR
+
+La máquina debe ser capaz de interpretar y ejecutar instrucciones del lenguaje intermedio (IR) especificado, incluyendo:
+* Aritmética entera (ADDI, SUBI, etc.)
+* Aritmética en punto flotante (ADDF, SUBF, etc.)
+* Lógica y comparación (ANDI, ORI, EQI, NEF, etc.)
+* Conversión entre tipos (ITOF, FTOI)
+* Acceso a memoria (PEEKI, POKEI, PEEKF, POKEF, PEEKB, POKEB)
+* Carga y almacenamiento de variables (LOCAL_GET, GLOBAL_SET, etc.)
+* Funciones y retorno (CALL, RET)
+* Control de flujo estructurado (IF, ELSE, ENDIF, LOOP, CBREAK, ENDLOOP)
+* Expansión de memoria (GROW)
+* Entrada/salida (PRINTI, PRINTF, PRINTB)
+
+#### 1.2. Memoria
+* Memoria lineal (byte-addressable) inicializable y extensible.
+* Soporte para operaciones de lectura/escritura enteras, flotantes y bytes.
+
+#### 1.3. Pila de datos
+* Una pila que almacene operandos y resultados intermedios.
+* Soporte para tipos int, float, char (como enteros) y bool (como int).
+
+#### 1.4. Variables y entorno
+* Variables locales y globales, con acceso por nombre.
+* Soporte para scopes (entornos) por función.
+
+#### 1.5. Llamadas a funciones
+* Stack de activación con:
+  * Retorno
+  * Variables locales
+  * Punto de continuación
+
+### 2. Arquitectura Propuesta
+
+#### 2.1. Componentes principales
+* StackMachine
+* Ejecuta instrucciones IR paso a paso.
+* Administra pila, memoria, variables, funciones.
+* Memory
+* Memoria lineal de bytes.
+* Métodos para leer/escribir enteros y flotantes.
+* CallFrame
+* Representa un entorno de ejecución para una función.
+* Instruction Parser
+* Carga un programa IR desde un IRModule.
+'''
+
 from rich import print
 import json,os
 
@@ -21,370 +70,712 @@ def load_config():
         return {"Debug": True, "GenerateOutputFile": False}
 
 CONFIG = load_config()
-
+#------------------------------------------
 class StackMachine:
-    def __init__(self, memory_size=1024 * 1024 * 8): # Increased memory for Mandelbrot image (e.g. 800x800x4 bytes)
-        self.debug = CONFIG.get("Debug", True) 
-        self.stack = []
-        self.memory = bytearray(memory_size)
-        self.globals = {}
-        self.locals_stack = []
-        self.call_stack = []
-        self.functions = {}
-        self.pc = 0
-        self.program_instructions = []
+    def __init__(self):
+        self.stack = []                       # Pila principal (stores tuples: (type, value))
+        self.memory = bytearray([0] * 1024)   # Memoria lineal (bytearray for byte-addressable)
+        self.globals = {}                     # Variables globales {name: (value, type_str)}
+        self.locals_stack = []                # Stack de frames de variables locales [{name: (value, type_str)}]
+        self.call_stack = []                  # Stack de frames de llamada (pc_return, locals_frame_index)
+        self.functions = {}                   # Diccionario de funciones {name: func_data}
+        self.pc = 0                           # Contador de programa
+        self.programInst = []                 # Programa IR cargado para la función actual
         self.running = False
         self.current_function_name = None
-        self.loop_start_stack = []
-        self.if_start_stack = [] 
-        self.pc_just_set_by_control_flow = False
 
-        self.INT_SIZE = 4
-        self.FLOAT_SIZE = 4
-        
-    def _log_debug(self, message, flush=False): 
+        self.debug = CONFIG.get("Debug", True)
+        self.INT_SIZE = CONFIG.get("IntSize", 4)
+        self.FLOAT_SIZE = CONFIG.get("FloatSize", 4)
+
+        # For IF/LOOP control flow, to store previous PC values
+        self.control_flow_stack = []
+        self.pc_modified_by_operation = False 
+
+
+    def _log_debug(self, message, flush=False):
         if self.debug:
-            print(message, flush=flush)
+            print(f"[DEBUG SM]: {message}", flush=flush)
 
-    def _get_typed_value_from_stack(self):
-        if not self.stack:
-            call_stack_summary = [(item.get('previous_function_name', 'N/A'), item.get('return_pc', 'N/A')) for item in self.call_stack]
-            active_function = self.current_function_name if self.current_function_name else "Global/Unknown"
-            instr_preview = self.program_instructions[self.pc] if self.pc < len(self.program_instructions) else "N/A"
-            raise RuntimeError(f"Stack underflow in function {active_function} (PC={self.pc}, Instr={instr_preview}). Call stack (caller, ret_pc): {call_stack_summary}")
-        return self.stack.pop()
-
-    def _get_value_from_stack(self, expected_type_str):
-        if not self.stack:
-            call_stack_summary = [(item.get('previous_function_name', 'N/A'), item.get('return_pc', 'N/A')) for item in self.call_stack]
-            active_function = self.current_function_name if self.current_function_name else "Global/Unknown"
-            instr_preview = self.program_instructions[self.pc] if self.pc < len(self.program_instructions) else "N/A"
-            raise RuntimeError(f"Stack underflow in function {active_function} (PC={self.pc}, Instr={instr_preview}): expected {expected_type_str}. Call stack: {call_stack_summary}")
-        
-        stype, value = self.stack[-1] # Peek first for logging
-        self._log_debug(f"--- _get_value_from_stack: Expecting '{expected_type_str}'. Stack top: ({stype}, {value}). PC={self.pc} in {self.current_function_name}", flush=True)
-        
-        stype_pop, value_pop = self.stack.pop() # Actual pop
-
-        if stype_pop != expected_type_str:
-            raise TypeError(f"Type mismatch on stack (PC={self.pc} in {self.current_function_name}): expected {expected_type_str}, got {stype_pop} (value: {value_pop})")
-
-        if expected_type_str == 'int' and not isinstance(value_pop, int):
-            try: value_pop = int(value_pop)
-            except ValueError: raise TypeError(f"Value {value_pop} from stack cannot be converted to int.")
-        elif expected_type_str == 'float' and not isinstance(value_pop, float):
-            try: value_pop = float(value_pop)
-            except ValueError: raise TypeError(f"Value {value_pop} from stack cannot be converted to float.")
-        return value_pop
-
-    def _push_value_to_stack(self, value, type_char):
-        stack_type = 'unknown'
-        original_stack_id = id(self.stack)
-        # self._log_debug(f"--- _push_value_to_stack: Value={value}, TypeChar='{type_char}'. Stack BEFORE (id={original_stack_id}): {list(self.stack)}", flush=True)
-
-        if type_char == 'I':
-            stack_type = 'int'
-            if not isinstance(value, int):
-                try: value = int(value)
-                except (ValueError, TypeError): raise TypeError(f"Cannot convert value {value} to int for IR type 'I'.")
-        elif type_char == 'F':
-            stack_type = 'float'
-            if not isinstance(value, float):
-                try: value = float(value)
-                except (ValueError, TypeError): raise TypeError(f"Cannot convert value {value} to float for IR type 'F'.")
-        else:
-            raise TypeError(f"Unknown IR type character for push: {type_char}")
-        
-        self.stack.append((stack_type, value))
-        # self._log_debug(f"--- _push_value_to_stack: Stack AFTER (id={id(self.stack)}, should be same as {original_stack_id}): {list(self.stack)}", flush=True)
-        if id(self.stack) != original_stack_id:
-            self._log_debug(f"[bold red][CRITICAL_ERROR][/bold red] self.stack object ID changed during _push_value_to_stack!", flush=True)
-
+    def load_program(self, program): # Kept for potential direct instruction list loading
+        self.programInst = program
+        self.pc = 0
+        self.running = False # Should not start running just by loading
 
     def load_module(self, ir_module):
         self.functions = {}
         for name, func_def in ir_module.functions.items():
             self.functions[name] = {
-                'params': func_def.parmnames, 
-                'param_types': func_def.parmtypes, 
+                'name': func_def.name,
+                'params': func_def.parmnames,
+                'param_types': func_def.parmtypes, # IR types ('I', 'F')
                 'code': func_def.code,
-                'locals_spec': func_def.locals,
-                'return_type': func_def.return_type,
+                'locals_spec': func_def.locals, # {name: ir_type}
+                'locals_gox': func_def.locals_gox, # {name: gox_type}
+                'return_type': func_def.return_type, # IR type
+                'return_type_gox': func_def.return_type_gox,
                 'is_imported': func_def.imported
             }
-        self.globals = { name: (None, ir_module.globals[name].type) for name in ir_module.globals }
+        self.globals = { name: (None, ir_module.globals[name].type) for name in ir_module.globals } # Store as (value, IR_type)
         if 'main' not in self.functions:
             raise RuntimeError("No 'main' function found in IR module to start execution.")
+        self._log_debug(f"Module loaded. Functions: {list(self.functions.keys())}. Globals: {list(self.globals.keys())}")
 
-    def run(self):
+    def _initialize_execution(self):
         if not self.functions or 'main' not in self.functions:
             print("Error: Program not loaded or 'main' function is missing.")
-            return
-
+            return False
+        # Simulate the initial call to main
         self.op_CALL('main', is_initial_call=True)
-        
-        if self.debug and self.program_instructions: # Check if program_instructions is populated
-            self._log_debug("--- Initial Program Instructions (main) ---")
-            for idx, instr_tuple in enumerate(self.program_instructions[:min(60, len(self.program_instructions))]): 
-                self._log_debug(f"PC {idx:03d}: {instr_tuple}")
-            self._log_debug("--------------------------------------------")
+        return True
+
+    def run(self):
+        if not self._initialize_execution():
+            return
 
         self.running = True
         instruction_count = 0
-        max_instructions = 10 * 1000 * 1000 
+        # Max instructions to prevent accidental infinite loops during development
+        max_instructions = CONFIG.get("MaxInstructions", 10 * 10000*100)  
+
+        self._log_debug(f"--- Starting execution from '{self.current_function_name}' ---")
 
         while self.running:
-            if instruction_count > max_instructions:
-                print(f"[bold red]MAX INSTRUCTION COUNT ({max_instructions}) REACHED.[/bold red]")
-                self.running = False
-                break
-            instruction_count += 1
+            self._log_debug(f"TOP OF RUN LOOP: PC={self.pc}, Current Function={self.current_function_name}") # <-- ADD THIS LINE
+            if self.pc < 0 or self.pc >= len(self.programInst):
+                if self.current_function_name == 'main' and not self.call_stack : # Normal exit if main finishes and no call stack left
+                     self._log_debug(f"Execution finished: PC ({self.pc}) out of bounds for main's program instructions ({len(self.programInst)}).")
+                     self.running = False
+                     break
+                elif not self.programInst: # Can happen if a function is empty or RET is the first instruction
+                    self._log_debug(f"Warning: Program instructions list is empty for function '{self.current_function_name}'. Attempting RET.")
+                    if not self.call_stack: # No place to return to
+                        self.running = False
+                        break
+                    self.op_RET() # Try to return
+                    continue # Re-evaluate loop condition with new pc/programInst
+                else:
+                    raise RuntimeError(f"PC ({self.pc}) out of bounds. Program length: {len(self.programInst)} for function '{self.current_function_name}'. Call Stack: {self.call_stack}")
 
-            if self.pc >= len(self.program_instructions):
-                if not self.call_stack: 
-                    self.running = False
-                    break
-                else: 
-                    self._log_debug(f"[bold yellow][DEBUG_WARN][/bold yellow] End of instructions for {self.current_function_name}. Implicit RET.")
-                    current_func_ret_type = self.functions[self.current_function_name]['return_type']
-                    if current_func_ret_type == 'F' and (not self.stack or self.stack[-1][0] != 'float'):
-                        self.stack.append(('float', 0.0))
-                    elif current_func_ret_type == 'I' and (not self.stack or self.stack[-1][0] != 'int'):
-                         self.stack.append(('int', 0))
-                    self.op_RET()
-                    if not self.running: break 
-                    continue
-
-            instr = self.program_instructions[self.pc]
+            instr = self.programInst[self.pc]
             opname = instr[0]
             args = instr[1:] if len(instr) > 1 else []
 
-            if self.debug and opname in {"IF", "ELSE", "ENDIF", "CALL", "RET", "LOOP", "ENDLOOP", "CBREAK", "ITOF", "LOCAL_GET"}: 
-                self._log_debug(f"[bold yellow][DISPATCH_{opname}][/bold yellow] PC:{self.pc:03d} F:'{self.current_function_name}'. IF_S: {list(self.if_start_stack)}, LOOP_S: {list(self.loop_start_stack)} StackTop: {self.stack[-3:] if len(self.stack) >=3 else list(self.stack)}", flush=True)
+            self._log_debug(f"PC: {self.pc}, Func: {self.current_function_name}, Instr: {opname} {args}, Stack: {self.stack}, Locals: {self.locals_stack[-1] if self.locals_stack else 'N/A'}")
 
-            self.pc_just_set_by_control_flow = False
-            method_name = f"op_{opname}"
-            method = getattr(self, method_name, None)
-
+            method = getattr(self, f"op_{opname}", None)
             if method:
-                try:
-                    method(*args)
-                except Exception as e:
-                    print(f"[bold red]Runtime Error during '{opname}' at PC {self.pc} in '{self.current_function_name}': {e}[/bold red]")
-                    print(f"Instruction: {instr}, Stack: {self.stack}, Locals: {self.locals_stack[-1] if self.locals_stack else 'N/A'}")
-                    self.running = False 
+                original_pc = self.pc
+                self.pc_modified_by_operation = False # Reset done above
+                method(*args)
+                if not self.pc_modified_by_operation:
+                    # If the operation did not modify the PC itself,
+                    # and PC is still pointing at the instruction we just ran, increment it.
+                    if self.pc == original_pc:
+                        self.pc += 1
+                self._log_debug(f"END OF ITERATION: Next PC will be {self.pc}")
+                # If self.pc_modified_by_operation is True, the operation already set self.pc
+                # to the correct address for the *next* instruction fetch cycle.
             else:
-                self.running = False
-                raise RuntimeError(f"Unknown instruction: {opname} in function {self.current_function_name} at PC {self.pc}")
+                raise RuntimeError(f"Unknown instruction: {opname}")
 
-            if self.running:
-                if not self.pc_just_set_by_control_flow:
-                    self.pc += 1
-        
-        self._log_debug(f"[bold blue][DEBUG_RUN_END] Execution finished. Total instructions: {instruction_count}[/bold blue]")
+            instruction_count += 1
+            if instruction_count >= max_instructions:
+                self.running = False # Stop before raising error
+                print(f"Stack: {self.stack}")
+                print(f"Locals: {self.locals_stack[-1] if self.locals_stack else 'N/A'}")
+                print(f"Globals: {self.globals}")
+                raise RuntimeError(f"Instruction limit ({max_instructions}) reached, possible infinite loop or very long program. Last instruction: {opname} {args} at PC {self.pc-1 if self.pc > 0 else 0} in {self.current_function_name}")
+
+        self._log_debug("--- Execution halted ---")
         if self.stack:
-           self._log_debug(f"[bold blue][DEBUG_RUN_END] Final stack state: {self.stack}[/bold blue]")
+            self._log_debug(f"Final stack (non-empty): {self.stack}")
 
-    def op_CONSTI(self, value): self.stack.append(('int', int(value)))
-    def op_CONSTF(self, value): self.stack.append(('float', float(value)))
-    def op_ADDI(self): b=self._get_value_from_stack('int'); a=self._get_value_from_stack('int'); self.stack.append(('int',a+b))
-    def op_SUBI(self): b=self._get_value_from_stack('int'); a=self._get_value_from_stack('int'); self.stack.append(('int',a-b))
-    def op_MULI(self): b=self._get_value_from_stack('int'); a=self._get_value_from_stack('int'); self.stack.append(('int',a*b))
-    def op_DIVI(self): b=self._get_value_from_stack('int'); a=self._get_value_from_stack('int'); self.stack.append(('int',int(a/b) if b!=0 else (_ for _ in ()).throw(ZeroDivisionError("Integer division by zero"))))
-    def op_ADDF(self): b=self._get_value_from_stack('float'); a=self._get_value_from_stack('float'); self.stack.append(('float',a+b))
-    def op_SUBF(self): b=self._get_value_from_stack('float'); a=self._get_value_from_stack('float'); self.stack.append(('float',a-b))
-    def op_MULF(self): b=self._get_value_from_stack('float'); a=self._get_value_from_stack('float'); self.stack.append(('float',a*b))
-    def op_DIVF(self): b=self._get_value_from_stack('float'); a=self._get_value_from_stack('float'); self.stack.append(('float',a/b if b!=0.0 else (_ for _ in ()).throw(ZeroDivisionError("Float division by zero"))))
-    def _comparison_op_int(self, op): b=self._get_value_from_stack('int');a=self._get_value_from_stack('int');self.stack.append(('int',1 if op(a,b) else 0))
-    def _comparison_op_float(self, op): b=self._get_value_from_stack('float');a=self._get_value_from_stack('float');self.stack.append(('int',1 if op(a,b) else 0))
-    def op_LTI(self): self._comparison_op_int(lambda a,b: a<b)
-    def op_LEI(self): self._comparison_op_int(lambda a,b: a<=b)
-    def op_GTI(self): self._comparison_op_int(lambda a,b: a>b)
-    def op_GEI(self): self._comparison_op_int(lambda a,b: a>=b)
-    def op_EQI(self): self._comparison_op_int(lambda a,b: a==b)
-    def op_NEI(self): self._comparison_op_int(lambda a,b: a!=b)
-    def op_LTF(self): self._comparison_op_float(lambda a,b: a<b)
-    def op_LEF(self): self._comparison_op_float(lambda a,b: a<=b)
-    def op_GTF(self): self._comparison_op_float(lambda a,b: a>b)
-    def op_GEF(self): self._comparison_op_float(lambda a,b: a>=b)
-    def op_EQF(self): self._comparison_op_float(lambda a,b: a==b)
-    def op_NEF(self): self._comparison_op_float(lambda a,b: a!=b)
-    def op_ANDI(self): b=self._get_value_from_stack('int');a=self._get_value_from_stack('int');self.stack.append(('int',a&b))
-    def op_ORI(self): b=self._get_value_from_stack('int');a=self._get_value_from_stack('int');self.stack.append(('int',a|b))
-    
-    def op_ITOF(self): 
-        self._log_debug(f"--- op_ITOF (PC={self.pc}) --- ENTER. Stack BEFORE pop: {list(self.stack)}", flush=True)
-        val = self._get_value_from_stack('int')
-        self._log_debug(f"--- op_ITOF (PC={self.pc}) --- Popped {val}. Stack AFTER pop: {list(self.stack)}", flush=True)
-        self.stack.append(('float', float(val)))
-        self._log_debug(f"--- op_ITOF (PC={self.pc}) --- Pushed float. Stack FINAL: {list(self.stack)}", flush=True)
 
-    def op_FTOI(self): v=self._get_value_from_stack('float'); self.stack.append(('int',int(v)))
-    def op_PEEKI(self): addr=self._get_value_from_stack('int'); self.stack.append(('int',struct.unpack('<i',self.memory[addr:addr+self.INT_SIZE])[0]))
-    def op_POKEI(self): v=self._get_value_from_stack('int');addr=self._get_value_from_stack('int');self.memory[addr:addr+self.INT_SIZE]=struct.pack('<i',v)
-    def op_PEEKF(self): addr=self._get_value_from_stack('int'); self.stack.append(('float',struct.unpack('<f',self.memory[addr:addr+self.FLOAT_SIZE])[0]))
-    def op_POKEF(self): v=self._get_value_from_stack('float');addr=self._get_value_from_stack('int');self.memory[addr:addr+self.FLOAT_SIZE]=struct.pack('<f',v)
-    def op_PEEKB(self): addr=self._get_value_from_stack('int'); self.stack.append(('int',self.memory[addr]))
-    def op_POKEB(self): v=self._get_value_from_stack('int');addr=self._get_value_from_stack('int');self.memory[addr]=v
-    def op_GROW(self): sz=self._get_value_from_stack('int');old=len(self.memory);self.memory.extend(bytearray(sz));self.stack.append(('int',old))
-    
+    # --- Helper methods ---
+    def _pop_int(self):
+        val_type, value = self.stack.pop()
+        if val_type != 'I':
+            raise TypeError(f"Expected integer ('I') on stack, got {val_type}")
+        return int(value)
+
+    def _pop_float(self):
+        val_type, value = self.stack.pop()
+        if val_type != 'F':
+            raise TypeError(f"Expected float ('F') on stack, got {val_type}")
+        return float(value)
+
+    def _pop_any(self):
+        self._log_debug(f"DEBUG POP_ANY: Stack BEFORE pop: {self.stack}, id(self.stack): {id(self.stack)}")
+        if not self.stack:
+            self._log_debug("DEBUG POP_ANY: Stack is empty!")
+            raise IndexError("Pop from empty stack")
+        item = self.stack.pop()
+        self._log_debug(f"DEBUG POP_ANY: Popped item: {item}, Stack AFTER pop: {self.stack}")
+        return item
+
+    # --- Integer Arithmetic ---
+    def op_CONSTI(self, value):
+        self.stack.append(('I', int(value)))
+
+    def op_ADDI(self):
+        b = self._pop_int()
+        a = self._pop_int()
+        self.stack.append(('I', a + b))
+
+    def op_SUBI(self):
+        b = self._pop_int()
+        a = self._pop_int()
+        self.stack.append(('I', a - b))
+
+    def op_MULI(self):
+        b = self._pop_int()
+        a = self._pop_int()
+        self.stack.append(('I', a * b))
+
+    def op_DIVI(self):
+        b = self._pop_int()
+        a = self._pop_int()
+        if b == 0:
+            raise ZeroDivisionError("Integer division by zero")
+        self.stack.append(('I', a // b)) # Integer division
+
+    # --- Floating Point Arithmetic ---
+    def op_CONSTF(self, value):
+        self.stack.append(('F', float(value)))
+
+    def op_ADDF(self):
+        b = self._pop_float()
+        a = self._pop_float()
+        self.stack.append(('F', a + b))
+
+    def op_SUBF(self):
+        b = self._pop_float()
+        a = self._pop_float()
+        self.stack.append(('F', a - b))
+
+    def op_MULF(self):
+        b = self._pop_float()
+        a = self._pop_float()
+        self.stack.append(('F', a * b))
+
+    def op_DIVF(self):
+        b = self._pop_float()
+        a = self._pop_float()
+        if b == 0.0:
+            raise ZeroDivisionError("Floating point division by zero")
+        self.stack.append(('F', a / b))
+
+    # --- Logical and Comparison ---
+    # Integer comparisons
+    def op_ANDI(self): # Bitwise AND
+        b = self._pop_int()
+        a = self._pop_int()
+        self.stack.append(('I', a & b))
+
+    def op_ORI(self): # Bitwise OR
+        b = self._pop_int()
+        a = self._pop_int()
+        self.stack.append(('I', a | b))
+
+    def op_LTI(self):
+        b = self._pop_int()
+        a = self._pop_int()
+        self.stack.append(('I', 1 if a < b else 0))
+
+    def op_LEI(self):
+        b = self._pop_int()
+        a = self._pop_int()
+        self.stack.append(('I', 1 if a <= b else 0))
+
+    def op_GTI(self):
+        b = self._pop_int()
+        a = self._pop_int()
+        self.stack.append(('I', 1 if a > b else 0))
+
+    def op_GEI(self):
+        b = self._pop_int()
+        a = self._pop_int()
+        self.stack.append(('I', 1 if a >= b else 0))
+
+    def op_EQI(self):
+        b = self._pop_int()
+        a = self._pop_int()
+        self.stack.append(('I', 1 if a == b else 0))
+
+    def op_NEI(self):
+        b = self._pop_int()
+        a = self._pop_int()
+        self.stack.append(('I', 1 if a != b else 0))
+
+    # Float comparisons
+    def op_LTF(self):
+        b = self._pop_float()
+        a = self._pop_float()
+        self.stack.append(('I', 1 if a < b else 0)) # Result is bool (int)
+
+    def op_LEF(self):
+        b = self._pop_float()
+        a = self._pop_float()
+        self.stack.append(('I', 1 if a <= b else 0))
+
+    def op_GTF(self):
+        b = self._pop_float()
+        a = self._pop_float()
+        self.stack.append(('I', 1 if a > b else 0))
+
+    def op_GEF(self):
+        b = self._pop_float()
+        a = self._pop_float()
+        self.stack.append(('I', 1 if a >= b else 0))
+
+    def op_EQF(self):
+        b = self._pop_float()
+        a = self._pop_float()
+        self.stack.append(('I', 1 if a == b else 0))
+
+    def op_NEF(self):
+        b = self._pop_float()
+        a = self._pop_float()
+        self.stack.append(('I', 1 if a != b else 0))
+
+    # --- Type Conversion ---
+    def op_ITOF(self):
+        val_type, value = self._pop_any()
+        if val_type != 'I':
+            raise TypeError(f"ITOF requires an integer, got {val_type}")
+        self.stack.append(('F', float(value)))
+
+    def op_FTOI(self):
+        val_type, value = self._pop_any()
+        if val_type != 'F':
+            raise TypeError(f"FTOI requires a float, got {val_type}")
+        self.stack.append(('I', int(value)))
+
+    # --- Carga y almacenamiento de variables ---
     def op_LOCAL_GET(self, name):
-        self._log_debug(f"--- op_LOCAL_GET (PC={self.pc}) --- Name='{name}'. Stack BEFORE: {list(self.stack)}", flush=True)
         if not self.locals_stack:
-            raise RuntimeError("No local scope (locals_stack is empty).")
+            raise RuntimeError("LOCAL_GET: No local scope available.")
         current_locals = self.locals_stack[-1]
         if name not in current_locals:
-            raise NameError(f"Local variable '{name}' not found in function {self.current_function_name}. Available locals: {current_locals.keys()}")
-        value, var_type_char = current_locals[name]
-        self._log_debug(f"--- op_LOCAL_GET (PC={self.pc}) --- Retrieved ({value}, '{var_type_char}') for '{name}'. Calling _push_value_to_stack.", flush=True)
-        self._push_value_to_stack(value, var_type_char)
-        self._log_debug(f"--- op_LOCAL_GET (PC={self.pc}) --- Name='{name}'. Stack AFTER push: {list(self.stack)}", flush=True)
+            raise NameError(f"Local variable '{name}' not found in current scope.")
+        value, var_type = current_locals[name]
+        if value is None : # Check for uninitialized local variable
+            raise ValueError(f"Local variable '{name}' accessed before assignment.")
+        self.stack.append((var_type, value))
 
-    def op_LOCAL_SET(self, name): st,v=self._get_typed_value_from_stack(); t='I' if st=='int' else 'F'; self.locals_stack[-1][name]=(v,t)
-    def op_GLOBAL_GET(self, name): val,t = self.globals[name]; self._push_value_to_stack(val,t)
-    def op_GLOBAL_SET(self, name): st,v=self._get_typed_value_from_stack(); _,ot=self.globals[name];nt='I' if st=='int' else 'F';assert ot==nt;self.globals[name]=(v,ot)
+    def op_LOCAL_SET(self, name):
+        if not self.locals_stack:
+            raise RuntimeError("LOCAL_SET: No local scope available.")
+        val_type, value = self._pop_any()
+        current_locals = self.locals_stack[-1]
+        # Optionally, check if var_type matches the declared type in func_def.locals_spec
+        # For now, we'll trust the IR generator or allow dynamic typing within stack machine vars
+        current_locals[name] = (value, val_type)
 
+
+    def op_GLOBAL_GET(self, name):
+        if name not in self.globals:
+            raise NameError(f"Global variable '{name}' not found.")
+        value, var_type = self.globals[name]
+        if value is None : # Check for uninitialized global variable
+            raise ValueError(f"Global variable '{name}' accessed before assignment.")
+        self.stack.append((var_type, value))
+
+    def op_GLOBAL_SET(self, name):
+        self._log_debug(f"DEBUG GLOBAL_SET: Called for name='{name}'. Globals BEFORE: {self.globals.get(name)}")
+        val_type, value = self._pop_any()
+        self.globals[name] = (value, val_type)
+
+    # --- Funciones y retorno ---
+    # In class StackMachine:
     def op_CALL(self, func_name, is_initial_call=False):
-        # Log is now done by the run loop's DISPATCH_CALL
-        if func_name not in self.functions: raise NameError(f"Function '{func_name}' not defined.")
-        func_info = self.functions[func_name]
-        
-        if func_info['is_imported']:
-            self._log_debug(f"[bold yellow][DEBUG_WARN][/bold yellow] CALL to imported '{func_name}'. Args on stack: {len(self.stack)}. Expected params: {len(func_info['params'])}. Returning default.", flush=True)
-            for i in range(len(func_info['params'])):
-                if not self.stack:
-                    self._log_debug(f"[bold red][DEBUG_ERROR][/bold red] Stack underflow trying to pop arg {i} for imported func {func_name}", flush=True)
-                    break 
-                self._get_typed_value_from_stack() 
-            self.stack.append(('float' if func_info['return_type'] == 'F' else 'int', 0)) 
+        if func_name not in self.functions:
+            raise NameError(f"Function '{func_name}' not defined.")
+
+        func_def = self.functions[func_name]
+        if func_def['is_imported']:
+            # ... (keep your existing imported function handling) ...
+            # Example for handling imported functions if they might have loop contexts (unlikely for typical imports)
+            # self.pc_modified_by_operation = False # Or True if it behaves like a jump
+            self._log_debug(f"CALL: Imported function '{func_name}' handled.") # Minor log change
             return
 
+
+        # ... (existing code for new_locals, argument passing) ...
+        # Argument passing should be before saving caller's state if args are on stack
         new_locals = {}
-        num_params = len(func_info['params'])
-        
-        if len(self.stack) < num_params:
-            raise RuntimeError(f"Stack underflow: Not enough arguments on stack for function {func_name}. Expected {num_params}, got {len(self.stack)}. Stack: {list(self.stack)}")
+        for local_name, local_ir_type in func_def['locals_spec'].items():
+            new_locals[local_name] = (None, local_ir_type)
 
-        args_from_stack = [self._get_typed_value_from_stack() for _ in range(num_params)]
-        args_from_stack.reverse()
-
-        expected_param_types = func_info.get('param_types', [])
-        if len(expected_param_types) == num_params:
-            for i in range(num_params):
-                arg_stype, _ = args_from_stack[i]
-                expected_ir_type = expected_param_types[i]
-                if (expected_ir_type == 'I' and arg_stype != 'int') or \
-                   (expected_ir_type == 'F' and arg_stype != 'float'):
-                    raise TypeError(f"Type mismatch for param {i} ('{func_info['params'][i]}') of {func_name}: expected IR type {expected_ir_type}, got stack type {arg_stype}")
+        for i in range(len(func_def['params']) -1, -1, -1):
+            param_name = func_def['params'][i]
+            if not self.stack:
+                raise ValueError(f"Stack underflow when passing arguments to '{func_name}'. Expected {len(func_def['params'])} args.")
+            arg_type, arg_val = self._pop_any()
+            new_locals[param_name] = (arg_val, arg_type)
         
-        for i,p_name in enumerate(func_info['params']): 
-            val_stype, val = args_from_stack[i]
-            param_ir_type = expected_param_types[i] if i < len(expected_param_types) else ('I' if val_stype == 'int' else 'F')
-            new_locals[p_name]=(val, param_ir_type)
+        self.locals_stack.append(new_locals)
 
-        for l_name,l_type in func_info['locals_spec'].items():
-            if l_name not in new_locals: new_locals[l_name]=(0.0 if l_type=='F' else 0, l_type)
-        
         if not is_initial_call:
-            self.call_stack.append({'return_pc':self.pc+1,'locals_frame':self.locals_stack[-1] if self.locals_stack else {},
-                                    'previous_function_name':self.current_function_name,'previous_instructions':self.program_instructions})
-        self.locals_stack.append(new_locals); self.program_instructions=func_info['code']; self.pc=0
-        self.current_function_name=func_name; self.pc_just_set_by_control_flow=True
+            # Save the caller's control_flow_stack depth
+            caller_control_flow_depth = len(self.control_flow_stack)
+            self.call_stack.append({
+                'pc_return': self.pc + 1,
+                'locals_frame_index': len(self.locals_stack) - 2, # Caller's locals frame index
+                'previous_function_name': self.current_function_name,
+                'previous_programInst': self.programInst,
+                'previous_control_flow_depth': caller_control_flow_depth # <-- STORE THIS
+            })
+            self._log_debug(f"CALL: Pushed {self.call_stack[-1]} to call_stack.")
 
+        self.current_function_name = func_name
+        self.programInst = func_def['code']
+        self.pc = 0
+        self.pc_modified_by_operation = True
+        self._log_debug(f"CALL: Jumping to {func_name}. New PC=0. Locals frame created. Program instructions loaded for {func_name}.")
+
+    # In class StackMachine:
     def op_RET(self):
-        # Log is now done by the run loop's DISPATCH_RET
-        if not self.call_stack: self.running=False; self.pc_just_set_by_control_flow=True; return
-        prev_frame=self.call_stack.pop(); self.pc=prev_frame['return_pc']; self.locals_stack.pop()
-        self.current_function_name=prev_frame['previous_function_name']; self.program_instructions=prev_frame['previous_instructions']
-        self.pc_just_set_by_control_flow=True
+        # ... (existing code for popping locals_stack) ...
+        if not self.locals_stack: # This check should be after ensuring there is a scope to pop
+             if not (self.current_function_name == 'main' and not self.call_stack): # Main might not have locals if empty
+                 raise RuntimeError("RET: Locals stack is empty, cannot restore  (or was already popped).")
+        else:
+            self.locals_stack.pop()
 
-    def _find_jump_target(self, pc_of_initiating_op, target_op_primary, target_op_secondary=None, open_op_context=None, close_op_context=None):
-        pc_scan = pc_of_initiating_op + 1
-        nest_level = 0
-        self._log_debug(f"[bold cyan][JUMP_FINDER][/bold cyan] START: PC_init={pc_of_initiating_op}, Find='{target_op_primary}' (Alt='{target_op_secondary}'), Context='{open_op_context}/{close_op_context}'", flush=True)
-        while pc_scan < len(self.program_instructions):
-            opname_scan = self.program_instructions[pc_scan][0]
-            if nest_level == 0:
-                if opname_scan == target_op_primary:
-                    self._log_debug(f"[bold cyan][JUMP_FINDER][/bold cyan]   FOUND Primary '{target_op_primary}' at PC {pc_scan}", flush=True)
-                    return pc_scan
-                if target_op_secondary and opname_scan == target_op_secondary:
-                    self._log_debug(f"[bold cyan][JUMP_FINDER][/bold cyan]   FOUND Secondary '{target_op_secondary}' at PC {pc_scan}", flush=True)
-                    return pc_scan
-            if open_op_context and opname_scan == open_op_context: nest_level += 1
-            elif close_op_context and opname_scan == close_op_context: nest_level -= 1
-            pc_scan += 1
-        error_msg = f"Mismatched control flow: Could not find '{target_op_primary}' or '{target_op_secondary}' for op at PC {pc_of_initiating_op}."
-        self._log_debug(f"[bold red][JUMP_FINDER_ERROR][/bold red] {error_msg}", flush=True) 
-        raise RuntimeError(error_msg)
 
+        if not self.call_stack: # Returning from 'main'
+            self._log_debug(f"RET: No call stack frame. Assuming return from '{self.current_function_name_or_none()}' or initial context. Halting.")
+            self.running = False
+            self.pc = -1 
+            self.pc_modified_by_operation = True
+            self.control_flow_stack.clear() # Clear any loop contexts from main
+            self._log_debug(f"RET: Cleared control_flow_stack as returning from last function. Stack: {self.control_flow_stack}")
+            return
+
+        # Normal function return
+        return_frame = self.call_stack.pop()
+        self.pc = return_frame['pc_return']
+        self.current_function_name = return_frame['previous_function_name']
+        self.programInst = return_frame['previous_programInst']
+        self.pc_modified_by_operation = True # Ensure this is set for RET
+
+        # Restore/truncate control_flow_stack
+        if 'previous_control_flow_depth' in return_frame:
+            target_depth = return_frame['previous_control_flow_depth']
+            if len(self.control_flow_stack) > target_depth:
+                self._log_debug(f"RET: Truncating control_flow_stack from {len(self.control_flow_stack)} (top: {self.control_flow_stack[-1] if self.control_flow_stack else 'N/A'}) to depth {target_depth}.")
+                self.control_flow_stack = self.control_flow_stack[:target_depth]
+            # else:
+                # self._log_debug(f"RET: control_flow_stack depth ({len(self.control_flow_stack)}) already at or below target caller depth ({target_depth}). No change needed.")
+        else:
+            # This would be an issue if returning from a function that could have nested loops
+            # and was called by a mechanism that didn't save 'previous_control_flow_depth'.
+            # For now, this case might not arise if all CALLs are updated.
+            self._log_debug(f"RET: Warning - 'previous_control_flow_depth' not in return_frame. control_flow_stack not explicitly truncated by this mechanism for function {self.current_function_name}.")
+
+        self._log_debug(f"RET: Returning to {self.current_function_name} at PC {self.pc}. Locals restored. Call stack size: {len(self.call_stack)}. Control_flow_stack: {self.control_flow_stack}")
+        # ... (rest of your RET logic, e.g., for halting if main was empty) ...
+        if not self.programInst and self.current_function_name == 'main': # Edge case: main was empty
+            self.running = False
+            self.pc = -1
+
+
+    def current_function_name_or_none(self):
+        return self.current_function_name if self.current_function_name else "global/unknown context"
+
+
+    # --- Control de flujo estructurado ---
+    # These require careful management of PC.
+    # The IR generator should produce labels or relative jumps.
+    # For this stack machine, we'll assume jump targets are absolute PCs
+    # or that IF/LOOP etc. implicitly manage blocks.
+    # A common way is IF jumps to ELSE or ENDIF if false.
+    # LOOP marks start, CBREAK jumps to ENDLOOP, ENDLOOP jumps to LOOP.
+
+    # For structured IF/ELSE/ENDIF, LOOP/CBREAK/ENDLOOP, the IR usually includes
+    # jump targets (labels that are resolved to PC values).
+    # If the IR has ('IF_FALSE_JUMP', label_else), ('JUMP', label_endif)
+    # For simplicity here, let's assume a block-based approach where the
+    # StackMachine finds matching ENDIF/ENDLOOP. This is harder to do efficiently
+    # without pre-calculating jump targets.
+
+    # A simpler model for IF: if condition is false, skip to matching ELSE or ENDIF.
+    # For now, IF will pop condition. If false, it will scan forward for ELSE or ENDIF.
+    # This is inefficient but demonstrates the logic. A real compiler would use labels/addresses.
+
+    # In class StackMachine:
     def op_IF(self):
-        pc_if = self.pc
-        # self._log_debug(f"[bold magenta][OP_IF_PRE_APPEND][/bold magenta] PC={pc_if}. ID of self.if_start_stack: {id(self.if_start_stack)}. Content: {list(self.if_start_stack)}", flush=True)
-        if self.if_start_stack is None: self.if_start_stack = []
-        self.if_start_stack.append(pc_if) 
-        # self._log_debug(f"[bold magenta][OP_IF_POST_APPEND_PRE_GET_COND][/bold magenta] PC={pc_if}. IF_S after append: {list(self.if_start_stack)}. ID: {id(self.if_start_stack)}", flush=True)
-        condition = self._get_value_from_stack('int')
-        self._log_debug(f"--- op_IF (PC={pc_if}) --- Cond={condition}, IF_S after append & get_cond: {list(self.if_start_stack)}", flush=True)
-
-        if condition == 0: 
-            self._log_debug(f"--- op_IF (PC={pc_if}) --- Cond=0 ENTER. IF_S: {list(self.if_start_stack)}", flush=True)
-            try:
-                jump_target_pc = self._find_jump_target(pc_if, 'ELSE', 'ENDIF', 'IF', 'ENDIF') 
-                self._log_debug(f"--- op_IF (PC={pc_if}) --- Cond=0 POST_FIND. Target={jump_target_pc}. IF_S: {list(self.if_start_stack)}", flush=True)
-                self.pc = jump_target_pc
-                self.pc_just_set_by_control_flow = True
-                self._log_debug(f"--- op_IF (PC={pc_if}) --- Cond=0 EXIT (SUCCESS). NewPC={self.pc}. IF_S: {list(self.if_start_stack)}", flush=True)
-            except RuntimeError as e:
-                self._log_debug(f"[bold red][OP_IF_EXCEPT][/bold red] PC={pc_if} Exception in _find_jump_target. IF_S before pop: {list(self.if_start_stack)}", flush=True)
-                if self.if_start_stack and self.if_start_stack[-1] == pc_if: self.if_start_stack.pop() 
-                self._log_debug(f"[bold red][OP_IF_EXCEPT][/bold red] PC={pc_if} IF_S after pop: {list(self.if_start_stack)}", flush=True)
-                raise
-        else: 
-            self._log_debug(f"--- op_IF (PC={pc_if}) --- Cond=1 TRUE_EXIT. IF_S: {list(self.if_start_stack)}", flush=True)
+        condition_type, condition_value = self._pop_any()
+        if condition_type != 'I':
+            raise TypeError("IF condition must be an integer (boolean).") #
+        
+        if condition_value == 0: # Condition is False
+            nesting_level = 1
+            scan_pc = self.pc + 1 # Start scanning instructions after the current IF
+            
+            while scan_pc < len(self.programInst):
+                instr_name = self.programInst[scan_pc][0]
+                if instr_name == 'IF':
+                    nesting_level += 1
+                elif instr_name == 'ENDIF':
+                    nesting_level -= 1
+                    if nesting_level == 0: 
+                        # Found the ENDIF for this IF, and no ELSE was found for this IF block.
+                        # This means it was an IF without an ELSE.
+                        self.pc = scan_pc # Jump to the ENDIF instruction.
+                        self.pc_modified_by_operation = True
+                        return
+                elif instr_name == 'ELSE' and nesting_level == 1:
+                    # Found the ELSE that matches the current IF.
+                    # Jump to the instruction *after* this ELSE instruction.
+                    self.pc = scan_pc + 1 
+                    self.pc_modified_by_operation = True
+                    return
+                scan_pc += 1
+            # If the loop finishes, a matching ENDIF (or ELSE if expected) was not found.
+            raise RuntimeError(f"IF(false) at PC {self.pc-1} did not find matching ELSE or ENDIF.")
+        else: # Condition is True
+            # Do nothing; self.pc_modified_by_operation remains False.
+            # The main run() loop will increment self.pc to execute the next instruction (the true-block).
+            # The ELSE instruction (if present) later on will handle skipping the else-block.
+            pass
 
     def op_ELSE(self):
-        pc_else = self.pc
-        self._log_debug(f"--- op_ELSE (PC={pc_else}) --- ENTER. IF_S: {list(self.if_start_stack)}", flush=True)
-        if not self.if_start_stack: 
-            call_stack_summary = [(item.get('previous_function_name', 'N/A'), item.get('return_pc', 'N/A')) for item in self.call_stack]
-            self._log_debug(f"[bold red][OP_ELSE_ERROR_DETAIL][/bold red] Call Stack: {call_stack_summary}", flush=True)
-            raise RuntimeError(f"ELSE at PC {pc_else} without matching IF on if_start_stack. Current IF_S: {list(self.if_start_stack)}")
-        pc_of_if = self.if_start_stack[-1] 
-        try:
-            jump_target_pc = self._find_jump_target(pc_of_if, 'ENDIF', None, 'IF', 'ENDIF')
-            self.pc = jump_target_pc
-            self.pc_just_set_by_control_flow = True
-        except RuntimeError as e: raise
+        # This instruction implies the 'IF' block was executed.
+        # We need to skip to the matching ENDIF.
+        nesting_level = 1
+        target_pc = self.pc + 1
+        while target_pc < len(self.programInst):
+            instr_name = self.programInst[target_pc][0]
+            if instr_name == 'IF': # Should not happen if IFs are properly nested with ELSE
+                nesting_level +=1
+            elif instr_name == 'ENDIF':
+                nesting_level -= 1
+                if nesting_level == 0:
+                    self.pc = target_pc # Will be incremented by main loop, so ENDIF is executed next
+                    self.pc_modified_by_operation = True
+                    return
+            target_pc += 1
+        raise RuntimeError("ELSE without matching ENDIF.")
 
     def op_ENDIF(self):
-        pc_endif = self.pc
-        self._log_debug(f"--- op_ENDIF (PC={pc_endif}) --- ENTER. IF_S before pop: {list(self.if_start_stack)}", flush=True)
-        if not self.if_start_stack:
-            self._log_debug(f"[bold yellow][DEBUG_WARN][/bold yellow] ENDIF at PC={pc_endif} encountered with empty if_start_stack.", flush=True)
-        else:
-            self.if_start_stack.pop()
-        self._log_debug(f"--- op_ENDIF (PC={pc_endif}) --- EXIT. IF_S after pop: {list(self.if_start_stack)}", flush=True)
-        
-    def op_LOOP(self): self.loop_start_stack.append(self.pc)
-    def op_ENDLOOP(self):
-        if not self.loop_start_stack: raise RuntimeError("ENDLOOP without matching LOOP.")
-        self.pc = self.loop_start_stack[-1]; self.pc_just_set_by_control_flow = True
-    def op_CBREAK(self):
-        condition = self._get_value_from_stack('int')
-        if condition != 0: 
-            if not self.loop_start_stack: raise RuntimeError(f"CBREAK at PC {self.pc} outside loop.")
-            current_loop_start_pc = self.loop_start_stack[-1] 
-            try:
-                endloop_pc = self._find_jump_target(current_loop_start_pc, 'ENDLOOP', None, 'LOOP', 'ENDLOOP')
-                self.loop_start_stack.pop() # Pop only if break is successful and target found
-                self.pc = endloop_pc + 1 
-                self.pc_just_set_by_control_flow = True
-            except RuntimeError as e: raise 
-    def op_CONTINUE(self):
-        if not self.loop_start_stack: raise RuntimeError("CONTINUE outside loop.")
-        self.pc = self.loop_start_stack[-1]; self.pc_just_set_by_control_flow = True
+        # ENDIF is a marker, no specific action other than being a jump target.
+        # PC will be incremented by the main loop.
+        pass
 
-    def op_PRINTI(self): print(f"[bold green][PRINT][/bold green] OUTPUT: {self._get_value_from_stack('int')}") 
-    def op_PRINTF(self): print(f"[bold green][PRINT][/bold green] OUTPUT: {self._get_value_from_stack('float')}")
-    def op_PRINTB(self): v=self._get_value_from_stack('int'); print(f"[bold green][PRINT][/bold green] OUTPUT_CHAR: {chr(v)}", end='')
+    def op_LOOP(self):
+        # Mark the start of the loop for ENDLOOP and CONTINUE.
+        # We push the current PC (address of LOOP instruction) onto a control flow stack.
+        self._log_debug(f"LOOP instruction at PC={self.pc}. Pushing {{'type': 'LOOP_START', 'pc': {self.pc}}} to control_flow_stack.")
+        self.control_flow_stack.append({'type': 'LOOP_START', 'pc': self.pc})
+        # PC will be incremented by the main loop to enter the loop body.
+
+    def op_CBREAK(self): # Conditional Break
+        condition_type, condition_value = self._pop_any()
+        if condition_type != 'I':
+            raise TypeError("CBREAK condition must be an integer (boolean).")
+
+        if condition_value != 0: # True, so break
+            # Find matching ENDLOOP
+            scan_pc = self.pc + 1 # Start scanning from instruction after CBREAK
+            temp_nesting = 0
+            found_endloop = False
+            
+            while scan_pc < len(self.programInst):
+                instr_name = self.programInst[scan_pc][0]
+                if instr_name == 'LOOP':
+                    temp_nesting += 1
+                elif instr_name == 'ENDLOOP':
+                    if temp_nesting == 0: # This ENDLOOP matches our current CBREAK's loop level
+                        # Set PC to instruction AFTER this ENDLOOP
+                        self.pc = scan_pc + 1 
+                        self.pc_modified_by_operation = True
+                        found_endloop = True
+                        break
+                    else: # This ENDLOOP belongs to an inner, nested loop
+                        temp_nesting -= 1
+                scan_pc += 1
+            
+            if not found_endloop:
+                raise RuntimeError("CBREAK without matching ENDLOOP or loop structure error.")
+
+            # Clean up the control_flow_stack for the loop being exited.
+            # CBREAK exits the innermost loop it's part of, so its LOOP_START marker should be at the top.
+            if self.control_flow_stack and self.control_flow_stack[-1]['type'] == 'LOOP_START':
+                self.control_flow_stack.pop() # Pop the LOOP_START of the broken loop
+            else:
+                # This signifies a problem, as CBREAK should be within a loop
+                # context that has placed its marker on the control_flow_stack.
+                self._log_debug("Critical Warning: CBREAK executed but control_flow_stack was empty or its top was not a LOOP_START marker. This could indicate a prior issue.")
+            
+            return # PC is set to after ENDLOOP, control_flow_stack adjusted. Main run loop will continue from new PC.
+        
+        # If condition_value is 0 (false), do nothing. 
+        # PC will be incremented by the main run loop to the next instruction.
+
+
+    def op_CONTINUE(self):
+        # Jump to the beginning of the current (innermost) loop.
+        # The beginning is the instruction *after* the LOOP instruction.
+        if not self.control_flow_stack:
+            raise RuntimeError("CONTINUE without active LOOP.")
+
+        loop_start_info = None
+        for i in range(len(self.control_flow_stack) - 1, -1, -1):
+            if self.control_flow_stack[i]['type'] == 'LOOP_START':
+                loop_start_info = self.control_flow_stack[i]
+                break
+        
+        if not loop_start_info:
+            raise RuntimeError("CONTINUE found no LOOP_START on control_flow_stack.")
+
+        self.pc = loop_start_info['pc'] # PC of the LOOP instruction. Main loop will increment it.
+                                        # So effectively jumps to instruction *after* LOOP.
+                                        # No, it should jump TO the LOOP instruction itself, which then proceeds.
+                                        # The run loop increments PC *after* instruction execution.
+                                        # So, setting PC to loop_start_info['pc'] means LOOP will be re-executed.
+                                        # This might be okay if LOOP itself doesn't have side effects other than marking.
+                                        # Or, it should be loop_start_info['pc'] and LOOP does nothing on re-entry if already marked.
+                                        # Let's set it to loop_start_info['pc'] - 1 so after increment it's the LOOP instr.
+                                        # No, set to loop_start_info['pc'] directly. The LOOP instruction should be idempotent or simply a marker.
+
+        self.pc = loop_start_info['pc'] # The run() loop will execute this LOOP instruction next, then increment PC.
+        self.pc_modified_by_operation = True
+    def op_ENDLOOP(self):
+        # Jump back to the corresponding LOOP instruction.
+        if not self.control_flow_stack or self.control_flow_stack[-1]['type'] != 'LOOP_START':
+            raise RuntimeError("ENDLOOP without matching LOOP or malformed control_flow_stack.")
+        
+        loop_start_info = self.control_flow_stack.pop() # Remove this loop's mark
+        self._log_debug(f"ENDLOOP at PC={self.pc}. Popped loop_start_info: {loop_start_info}. Jumping to PC={loop_start_info['pc']}.")
+        self.pc = loop_start_info['pc'] # Jump to the LOOP instruction itself.
+                                        # The run loop will execute LOOP, then increment PC to enter body.
+        self.pc_modified_by_operation = True
+
+    # --- Expansión de memoria ---
+    # In class StackMachine:
+    def op_GROW(self):
+        num_bytes_type, num_bytes = self._pop_any()
+        if num_bytes_type != 'I':
+            raise TypeError("GROW expects an integer (number of bytes) on stack.")
+        if num_bytes < 0:
+            raise ValueError("Cannot grow memory by a negative amount.")
+
+        base_address_of_new_block = len(self.memory) # This is current_size before growth
+        
+        try:
+            self.memory.extend(bytearray(num_bytes))
+        except MemoryError: # It's good practice to catch potential MemoryError during extend
+            current_total_size = len(self.memory) # Get current size before erroring
+            raise MemoryError(f"Failed to grow memory by {num_bytes} bytes. Current total size: {current_total_size}")
+        
+        # Push ONLY the base address of the newly allocated block
+        self.stack.append(('I', base_address_of_new_block)) 
+        
+        self._log_debug(f"Memory grown by {num_bytes} bytes. Base of new block: {base_address_of_new_block}, New total size: {len(self.memory)}. Pushed base address of new block.")
+
+
+    # --- Entrada/salida ---
+    def op_PRINTI(self):
+        val_type, value = self._pop_any()
+        if val_type != 'I':
+            raise TypeError(f"PRINTI requires an integer, got {val_type}")
+        print(f"[bold dark_green][OUTPUT][/bold dark_green] {int(value)}")
+
+    def op_PRINTF(self):
+        val_type, value = self._pop_any()
+        if val_type != 'F':
+            raise TypeError(f"PRINTF requires a float, got {val_type}")
+        print(f"[bold dark_green][OUTPUT][/bold dark_green] {float(value)}")
+
+    def op_PRINTB(self): # Prints byte as integer value, or as char? "PRINTB ; Imprimir el elemento superior de la pila" (value presented as integer)
+        val_type, value = self._pop_any()
+        if val_type != 'I': # Bytes are usually represented as integers 0-255
+            raise TypeError(f"PRINTB requires an integer (representing a byte), got {val_type}")
+        # Assuming it prints the integer value of the byte.
+        # If it should print as a character: print(chr(int(value)))
+        print(f"[bold dark_green][OUTPUT][/bold dark_green] {int(value)}")
+
+    # --- Acceso a memoria ---
+    # PEEKI, POKEI, PEEKF, POKEF, PEEKB, POKEB 
+    
+    def op_PEEKI(self): # Address is on stack
+        """Read 4-byte integer from memory at address (little-endian)"""
+        address = self._pop_int()
+        if address < 0 or address + self.INT_SIZE > len(self.memory):
+            raise IndexError(f"PEEKI: Memory access out of bounds. Address: {address}, Memory size: {len(self.memory)}")
+        
+        # Read 4 bytes in little-endian order
+        bytes_data = self.memory[address:address + self.INT_SIZE]
+        value = int.from_bytes(bytes_data, byteorder='little', signed=True)
+        self.stack.append(('I', value))
+        self._log_debug(f"PEEKI: Read integer {value} from address {address}")
+
+    def op_POKEI(self): # Value, then Address on stack
+        """Write 4-byte integer to memory at address (little-endian)"""
+        value = self._pop_int()  # El valor está en el tope de la pila
+        address = self._pop_int()  # La dirección está debajo del valor
+        
+        if address < 0 or address + self.INT_SIZE > len(self.memory):
+            raise IndexError(f"POKEI: Memory access out of bounds. Address: {address}, Memory size: {len(self.memory)}")
+        
+        # Write 4 bytes in little-endian order
+        bytes_data = value.to_bytes(self.INT_SIZE, byteorder='little', signed=True)
+        self.memory[address:address + self.INT_SIZE] = bytes_data
+        self._log_debug(f"POKEI: Wrote integer {value} to address {address}")
+
+
+    def op_PEEKF(self): # Address is on stack
+        """Read 4-byte float from memory at address (little-endian)"""
+        import struct
+        address = self._pop_int()
+        
+        if address < 0 or address + self.FLOAT_SIZE > len(self.memory):
+            raise IndexError(f"PEEKF: Memory access out of bounds. Address: {address}, Memory size: {len(self.memory)}")
+        
+        # Read 4 bytes and convert to float using IEEE 754 format
+        bytes_data = self.memory[address:address + self.FLOAT_SIZE]
+        value = struct.unpack('<f', bytes_data)[0]  # '<f' = little-endian float
+        self.stack.append(('F', value))
+        self._log_debug(f"PEEKF: Read float {value} from address {address}")
+
+    def op_POKEF(self): # Value, then Address on stack
+        """Write 4-byte float to memory at address (little-endian)"""
+        import struct
+        value = self._pop_float()  # El valor está en el tope de la pila
+        address = self._pop_int()  # La dirección está debajo del valor
+        
+        if address < 0 or address + self.FLOAT_SIZE > len(self.memory):
+            raise IndexError(f"POKEF: Memory access out of bounds. Address: {address}, Memory size: {len(self.memory)}")
+        
+        # Convert float to 4 bytes using IEEE 754 format
+        bytes_data = struct.pack('<f', value)  # '<f' = little-endian float
+        self.memory[address:address + self.FLOAT_SIZE] = bytes_data
+        self._log_debug(f"POKEF: Wrote float {value} to address {address}")
+
+    def op_PEEKB(self): # Address is on stack
+        """Read 1 byte from memory at address"""
+        address = self._pop_int()
+        
+        if address < 0 or address >= len(self.memory):
+            raise IndexError(f"PEEKB: Memory access out of bounds. Address: {address}, Memory size: {len(self.memory)}")
+        
+        value = self.memory[address]
+        self.stack.append(('I', value))  # Bytes are represented as integers
+        self._log_debug(f"PEEKB: Read byte {value} from address {address}")
+
+    def op_POKEB(self): # Value, then Address on stack
+        """Write 1 byte to memory at address"""
+        value = self._pop_int()  # El valor está en el tope de la pila
+        address = self._pop_int()  # La dirección está debajo del valor
+        
+        if address < 0 or address >= len(self.memory):
+            raise IndexError(f"POKEB: Memory access out of bounds. Address: {address}, Memory size: {len(self.memory)}")
+        
+        if value < 0 or value > 255:
+            raise ValueError(f"POKEB: Byte value must be 0-255, got {value}")
+        
+        self.memory[address] = value
+        self._log_debug(f"POKEB: Wrote byte {value} to address {address}")

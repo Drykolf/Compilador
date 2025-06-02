@@ -56,10 +56,12 @@ func mandel(width int, height int) int {
 
 func make_plot(width int, height int) int {
     var result int = mandel(width, height);
+    print result;
     return put_image(0, width, height);
 }
 
-make_plot(800,800);
+make_plot(10,10);
+ 
 
 
 

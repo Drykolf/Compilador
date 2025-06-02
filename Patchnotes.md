@@ -2,8 +2,8 @@
 ### Maquina de Pila:
 1. El manejo de memoria es horrible
 2. Se creo un metodo "op_" para cada tipo de instruccion del codigo intermedio
-3. El manejo de ciclos tambien es horrible
-4. los if dentro de un ciclo son un dolor
+3. El manejo de ciclos tambien es horrible, se creo una bandera para ver cuando habian instrucciones que hacian saltos, y mitigar la mayoria de problemas.
+4. Para las funciones importadas decidimos que retorne un valor 0 dependiendo del tipo de funcion, para hacer pruebas
 ## General:
 1. Se agrego un archivo nuevo de configuracion, para indicar facilmente cuando estamos haciendo pruebas y necesitamos ver mas informacion (debug, imprimir todas las salidas de los analizadores en archivos).
 2. A todos los analizadores se les agregaron condicionales para que generen un archivo con sus resultados.

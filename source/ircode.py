@@ -294,9 +294,9 @@ def new_temp(n=[0]):
 # Una función de nivel superior que comenzará a generar IRCode
 
 class IRCode(Visitor):
-	INT_SIZE = 4
-	FLOAT_SIZE = 4
-	CHAR_SIZE = 1
+	INT_SIZE = CONFIG.get("IntSize", 4)  # Tamaño de un entero en bytes
+	FLOAT_SIZE = CONFIG.get("FloatSize", 4)  # Tamaño de un flotante en bytes
+	CHAR_SIZE = CONFIG.get("CharSize", 1)  # Tamaño de un carácter en bytes
 	_binop_code = {
 		('int', '+', 'int')  : 'ADDI',
 		('int', '-', 'int')  : 'SUBI',
@@ -483,7 +483,7 @@ class IRCode(Visitor):
 		'''
 		parmnames = [p.name for p in n.params]
 		parmtypes = [_typemap[p.type] for p in n.params]
-		rettype   = _typemap[n.func_type]
+		rettype   = _typemap.get(n.func_type, 'int') if n.func_type else 'I'
 
 		if n.name == 'main':
 			name = '_actual_main'
@@ -504,7 +504,23 @@ class IRCode(Visitor):
 			# Visitar n.stmts
 			for stmt in n.statements:
 				stmt.accept(self, newfunc)
-		
+			# Verificar si la última instrucción es RET
+            # Si no lo es, agregar un return por defecto
+			if not newfunc.code or newfunc.code[-1][0] != 'RET':
+				# Agregar valor de retorno por defecto según el tipo de retorno
+				if rettype == 'I':  # int, bool, char
+					newfunc.append(('CONSTI', 0))
+				elif rettype == 'F':  # float
+					newfunc.append(('CONSTF', 0.0))
+				else:
+					# Tipo desconocido, usar entero por defecto
+					newfunc.append(('CONSTI', 0))
+				
+				newfunc.append(('RET',))
+				
+				if self.debug:
+					print(f"[bold yellow][DEBUG_WARN][/bold yellow] Función '{name}' no tenía return explícito. Se agregó return por defecto.")
+	
 	# --- Expressions
 	
 	@visit.register

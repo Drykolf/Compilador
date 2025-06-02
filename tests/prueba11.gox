@@ -8,3 +8,8 @@ var retrieved int = `address;  // Retrieve value from memory
 var retrieved2 int = `(address+1);  // Retrieve value from memory
 print retrieved;  // Should print 42
 print retrieved2;  // Should print 84
+
+// Testing GROW operator ^
+const n = 100;         
+const base = ^(n + 1); // Memoria para n+1 posiciones
+print base;

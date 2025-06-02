@@ -146,6 +146,9 @@ class Checker():
 		2. validar el tipo de n.expr
 		'''
 		expr_type = n.expr.accept(self, env)
+		if isinstance(n.expr, MemoryLocation):
+			expr_type = 'int'
+			n.expr.type = 'int'  # Asignar el tipo de la dereferencia
 		if expr_type not in typenames:
 			print(f"Error: Tipo inválido para la declaración print: {expr_type}")
 			self.hasErrors = True

@@ -37,6 +37,8 @@ def create_output_directory(filePath):
 
 def compile(file):
     debug = CONFIG.get("Debug", False)
+    if debug:print("[bold yellow][DEBUG][/bold yellow] Debugging...")
+    print(f"[bold green]Compilando {file}...[/bold green]")
     content = read_file(file)# Leer el archivo de entrada
     fileName = create_output_directory(file)  # Crear el directorio de salida si es necesario
     #try:
@@ -59,8 +61,7 @@ def compile(file):
     
 def debug():
     # Debugging function to check the output of the main function
-    print("[bold yellow][DEBUG][/bold yellow] Debugging...")
-    file = 'tests/prueba12.gox'
+    file = 'tests/test1.gox'
     compile(file)
 
 def main():
@@ -74,7 +75,3 @@ def main():
 if __name__ == '__main__':
 	#main()
 	debug()
-
-'''
-problemas en prueba 9
-'''
