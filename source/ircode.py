@@ -232,9 +232,10 @@ class IRModule:
 			
 # Variables Globales
 class IRGlobal:
-	def __init__(self, name, type):
+	def __init__(self, name, ir_type, gox_type=None):
 		self.name = name
-		self.type = type
+		self.type = ir_type      # Tipo IR
+		self.gox_type = gox_type # Tipo GoxLang original
 		
 	def dump(self):
 		print(f"GLOBAL::: {self.name}: {self.type}")
@@ -245,7 +246,7 @@ class IRGlobal:
 # de la función, los parámetros y el tipo de retorno.
 
 class IRFunction:
-	def __init__(self, module, name, parmnames, parmtypes, return_type, imported=False):
+	def __init__(self, module, name, parmnames, parmtypes, return_type, return_type_gox, imported=False):
 		# Agreguemos la lista de funciones del módulo adjunto
 		self.module = module
 		module.functions[name] = self
@@ -254,12 +255,16 @@ class IRFunction:
 		self.parmnames = parmnames
 		self.parmtypes = parmtypes
 		self.return_type = return_type
+		self.return_type_gox = return_type_gox
 		self.imported = imported
-		self.locals = { }    # Variables Locales
-		self.code = [ ]      # Lista de Instrucciones IR 
+		self.locals = { }        # Variables Locales (tipo IR)
+		self.locals_gox = { }    # Tipos GoxLang originales
+		self.code = [ ]          # Lista de Instrucciones IR 
 		
-	def new_local(self, name, type):
-		self.locals[name] = type
+	def new_local(self, name, ir_type, gox_type=None):
+		self.locals[name] = ir_type
+		if gox_type:
+			self.locals_gox[name] = gox_type
 		
 	def append(self, instr):
 		self.code.append(instr)
@@ -289,6 +294,9 @@ def new_temp(n=[0]):
 # Una función de nivel superior que comenzará a generar IRCode
 
 class IRCode(Visitor):
+	INT_SIZE = 4
+	FLOAT_SIZE = 4
+	CHAR_SIZE = 1
 	_binop_code = {
 		('int', '+', 'int')  : 'ADDI',
 		('int', '-', 'int')  : 'SUBI',
@@ -324,7 +332,7 @@ class IRCode(Visitor):
 		('+', 'float') : [],
 		('-', 'int')   : [('CONSTI', -1), ('MULI',)],
 		('-', 'float') : [('CONSTF', -1.0), ('MULF',)],
-		('!', 'bool')  : [('CONSTI', -1), ('MULI',)],
+		('!', 'bool') : [('CONSTI', 0), ('EQI',)],
 		('^', 'int')   : [ ('GROW',) ]
 	}
 	_typecast_code = {
@@ -346,7 +354,7 @@ class IRCode(Visitor):
 		ircode.createOutputFile = CONFIG.get("GenerateOutputFile", False)
 		ircode.module = IRModule()
 
-		func = IRFunction(ircode.module, 'main', [], [], 'I')
+		func = IRFunction(ircode.module, 'main', [], [], 'I', 'int')
 		# Then process statements in main function
 		if ircode.debug:
 			print(f"[bold green][DEBUG][/bold green] Iniciando generacion de codigo intermedio del archivo: {fileName}")
@@ -455,12 +463,12 @@ class IRCode(Visitor):
 	def _(self, n: Variable, func: IRFunction):
 		irtype = _typemap.get(n.type, 'I')
 		if func.name == 'main':  # Variables globales
-			self.module.globals[n.name] = IRGlobal(n.name, irtype)
+			self.module.globals[n.name] = IRGlobal(n.name, irtype, n.type)
 			if n.value:
 				n.value.accept(self, func)
 				func.append(('GLOBAL_SET', n.name))
 			return
-		func.new_local(n.name, irtype)
+		func.new_local(n.name, irtype, n.type)
 		# Visit the initializer if it exists
 		if n.value:
 			n.value.accept(self, func)
@@ -488,9 +496,10 @@ class IRCode(Visitor):
 			parmnames,
 			parmtypes,
 			rettype,
+			n.func_type,
 			n.imported
 		)
-		for p in n.params:newfunc.new_local(p.name, _typemap[p.type])
+		for p in n.params:newfunc.new_local(p.name, _typemap[p.type],p.type)
 		if not n.imported:
 			# Visitar n.stmts
 			for stmt in n.statements:
@@ -524,30 +533,24 @@ class IRCode(Visitor):
 	def _(self, n: BinOp, func: IRFunction):
 		if n.operator == '&&':
 			# short-circuit: Si n.left es false, hasta aca llega
-			left=True
-			n.left.accept(self, func)
-			func.append(('CONSTI', 0))
-			func.append(('EQI',))
-			func.append(('CBREAK',))
-			if not left:
-				func.append(('ANDI',))
-				return "bool"
-			n.right.accept(self, func)
-			func.append(('ANDI',))
+			n.left.accept(self, func)  # Leaves L_result on stack
+			func.append(('IF',))       # Consumes L_result. If L_result is true:
+			n.right.accept(self, func) # Evaluate R. Stack has R_result (value of L && R)
+			func.append(('ELSE',))     # If L_result was false:
+			func.append(('CONSTI', 0)) # Value of L && R is 0
+			func.append(('ENDIF',))
+			# Return type is bool (mapped to 'I')
 			return "bool"
 		
 		elif n.operator == '||':
 			# short-circuit: si n.left es true, hasta aca llega
-			left = False
-			n.left.accept(self, func)
-			func.append(('CONSTI', 0))
-			func.append(('NEI',))
-			func.append(('CBREAK',))
-			if left:
-				func.append(('ORI',))
-				return "bool"
-			n.right.accept(self, func)
-			func.append(('ORI',))
+			n.left.accept(self, func)  # Leaves L_result on stack
+			func.append(('IF',))       # Consumes L_result. If L_result is true:
+			func.append(('CONSTI', 1)) # Value of L || R is 1
+			func.append(('ELSE',))     # If L_result was false:
+			n.right.accept(self, func) # Evaluate R. Stack has R_result (value of L || R)
+			func.append(('ENDIF',))
+			# Return type is bool (mapped to 'I')
 			return "bool"
 		else:
 			leftT = n.left.accept(self, func)
@@ -559,7 +562,18 @@ class IRCode(Visitor):
 	def _(self, n: UnaryOp, func: IRFunction):
 		# Visitar n.expr
 		type = n.operand.accept(self, func)
-		func.extend((self._unaryop_code[n.operator, type],))
+		if n.operator == '^' and type == 'int':
+			# This is our special allocation operator for an array of integers.
+			# The number of elements is now on the stack.
+			# Multiply it by INT_SIZE (assuming 4 bytes for an int).
+			func.append(('CONSTI', 4))  # Or use a way to get self.INT_SIZE if available/consistent
+			func.append(('MULI',))
+			# Now the total number of bytes to allocate is on the stack.
+			# Proceed to emit the GROW instruction from _unaryop_code.
+			func.extend(self._unaryop_code[(n.operator, type)])
+		else:
+			# Original logic for other unary operators
+			func.extend(self._unaryop_code[(n.operator, type)])
 		return type
 		
 	@visit.register
@@ -573,7 +587,19 @@ class IRCode(Visitor):
 	@visit.register
 	def _(self, n: FunctionCall, func: IRFunction):
 		# Visitar n.args
+		arg_gox_types = []
+		for arg_expr in n.args:
+			arg_gox_type = arg_expr.accept(self, func) # Evalúa el argumento y deja el valor en la pila
+			arg_gox_types.append(arg_gox_type)
+		# 2. Emitir la instrucción CALL
 		func.append(('CALL', n.name))
+		# 3. Determinar el tipo de retorno GoxLang de la función
+		target_func_info = self.module.functions.get(n.name)
+		if not target_func_info:
+			if self.debug:
+				print(f"[bold yellow][DEBUG_WARN][/bold yellow] FunctionCall: No se encontró información para '{n.name}', asumiendo retorno int.")
+			return 'int' # Un default peligroso
+		return target_func_info.return_type_gox
 	
 	@visit.register
 	def _(self, n: NamedLocation, func: IRFunction):
@@ -590,39 +616,100 @@ class IRCode(Visitor):
 			pass
 		# Si no es una asignación, se carga la variable
 		if is_global:
-			_type = func.module.globals[n.name].type
+			_type = func.module.globals[n.name].gox_type
 			func.append(('GLOBAL_GET', n.name))
 		else:
-			_type = func.locals[n.name]
+			_type = func.locals_gox[n.name]
 			func.append(('LOCAL_GET', n.name))
 		# Retornar el tipo de la variable
-		return "float" if _type == 'F' else "int"
+		return _type
 
 	@visit.register
 	def _(self, n: MemoryLocation, func: IRFunction):
-		try:
-			if n.usage == 'store':
-				# Visitar n.address
-				# Visitar n.store_value (agregado en nodo Assignment)
-				_type = n.expr.accept(self, func)
-				n.store_value.accept(self, func)
-				if _type in {'int', 'bool'}:
-					func.append(('POKEI',))
-				elif _type == 'float':
-					func.append(('POKEF',))
-				elif _type == 'char':
-					func.append(('POKEB',))
-				return "float" if _type == 'F' else "int"
-		except AttributeError:
-			pass
-		# Visitar n.address
-		_type = n.expr.accept(self, func)
-		if _type in {'int', 'bool'}:
-			func.append(('PEEKI',))
-		elif _type == 'float':
-			func.append(('PEEKF',))
-		elif _type == 'char':
-			func.append(('PEEKB',))
-		return "float" if _type == 'F' else "int"
+		# n.type DEBE ser el tipo GoxLang del *dato en la dirección de memoria*,
+		# establecido por el analizador semántico/de tipos.
+		# Por ejemplo, para `var x *int; ... *x`, n.type sería 'int'.
+		dataType = n.type
 
+		# --- Cálculo de Dirección (una sola vez) ---
+		if isinstance(n.expr, BinOp) and n.expr.operator == '+':
+			# Probable acceso a array: base + indice
+			# n.expr.left es la base, n.expr.right es el índice
 
+			# 1. Evaluar la expresión base (debería resultar en una dirección entera)
+			base_addr_type = n.expr.left.accept(self, func) # Empuja la dirección base a la pila
+			if base_addr_type == 'float': # Las direcciones deben ser enteras
+				func.append(('FTOI',))
+
+			# 2. Evaluar la expresión del índice
+			index_val_type = n.expr.right.accept(self, func) # Empuja el valor del índice a la pila
+			if index_val_type == 'float': # Los índices suelen ser enteros
+				func.append(('FTOI',))
+
+			# 3. Aplicar escalado según el tipo del elemento
+			scale_factor = 1
+			apply_scaling_op = False # ¿Necesitamos una operación MULI explícita?
+			if dataType == 'int' or dataType == 'bool':
+				scale_factor = self.INT_SIZE
+				if self.INT_SIZE > 1: apply_scaling_op = True
+			elif dataType == 'float':
+				scale_factor = self.FLOAT_SIZE
+				if self.FLOAT_SIZE > 1: apply_scaling_op = True
+			elif dataType == 'char':
+				scale_factor = self.CHAR_SIZE # Usualmente 1
+				if self.CHAR_SIZE > 1: apply_scaling_op = True
+
+			if apply_scaling_op:
+				func.append(('CONSTI', scale_factor))
+				func.append(('MULI',))          # indice_escalado = indice * factor_escala
+
+			func.append(('ADDI',))              # direccion_final = direccion_base + indice_escalado
+		else:
+			# Acceso simple a puntero (ej. *p) o dirección ya calculada
+			# n.expr debería evaluarse a la dirección de byte final.
+			addr_val_type = n.expr.accept(self, func) # Empuja la dirección a la pila
+			if addr_val_type == 'float': # La dirección debe ser entera
+				func.append(('FTOI',))
+		# La dirección de byte final está ahora en la cima de la pila.
+
+		# --- Operación POKE o PEEK ---
+		is_store = hasattr(n, 'usage') and n.usage == 'store'
+
+		if is_store:
+			if not hasattr(n, 'store_value'):
+				raise ValueError(f"MemoryLocation en (línea {n.lineno}) usado en contexto de almacenamiento pero no tiene store_value.")
+
+			# Evaluar el valor a almacenar. Este valor se empuja a la pila.
+			# Pila: [direccion_final, valor_a_almacenar]
+			val_to_store_type = n.store_value.accept(self, func)
+
+			# Conversión de tipo implícita (simple) para el valor a almacenar.
+			# Un compilador más completo insertaría nodos TypeCast explícitos.
+			if dataType == 'int' and val_to_store_type == 'float':
+				func.append(('FTOI',))
+			elif dataType == 'float' and val_to_store_type == 'int':
+				func.append(('ITOF',))
+			# (char a int es usualmente implícito si el valor está en rango)
+
+			if dataType == 'int' or dataType == 'bool':
+				func.append(('POKEI',))
+			elif dataType == 'float':
+				func.append(('POKEF',))
+			elif dataType == 'char': # Asumiendo que char se almacena como byte (int 0-255)
+				func.append(('POKEB',))
+			else:
+				raise NotImplementedError(f"POKE para el tipo GoxLang {dataType} no implementado.")
+			return dataType # Retorna el tipo GoxLang de la ubicación
+		else: # Operación de carga (PEEK)
+			# La dirección ya está en la pila.
+			if dataType == 'int' or dataType == 'bool':
+				func.append(('PEEKI',))
+				return 'int' # Retorna el tipo GoxLang resultante
+			elif dataType == 'float':
+				func.append(('PEEKF',))
+				return 'float'
+			elif dataType == 'char':
+				func.append(('PEEKB',))
+				return 'char'
+			else:
+				raise NotImplementedError(f"PEEK para el tipo GoxLang {dataType} no implementado.")

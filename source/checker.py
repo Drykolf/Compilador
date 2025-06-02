@@ -86,29 +86,58 @@ class Checker():
 		3. Verificar si son tipos compatibles
 		'''
 		if isinstance(n.location, MemoryLocation):
-			# MemoryLocation is a special case, we need to check the address
-			address_type = n.location.accept(self, env)
-			type2 = n.expression.accept(self, env)
-			return address_type
-		loc = env.get(n.location.name)
-		if not loc:
-			print(f"Error: Variable '{n.location.name}' no definida.")
-			self.hasErrors = True
-			return
-		if isinstance(loc, Variable):	
-			if loc.is_const:
-				print(f"Error: La variable '{n.location.name}' es de solo lectura.")
+			# n.location es un nodo MemoryLocation.
+			# n.location.accept(self, env) ahora:
+			#  1. Valida que n.location.expr (la dirección) sea 'int'.
+			#  2. Establece n.location.type = 'int' (tipo del dato en memoria).
+			#  3. Retorna 'int' (el tipo del dato en memoria).
+			tipo_del_dato_en_memoria = n.location.accept(self, env)
+
+			# Si hubo un error al procesar n.location (ej. la dirección no era 'int')
+			if self.hasErrors:
+				return # Detener la verificación para esta asignación
+			tipo_rhs_expresion = n.expression.accept(self, env)
+			if tipo_del_dato_en_memoria == 'void':
+				tipo_del_dato_en_memoria = tipo_rhs_expresion
+				n.location.type = tipo_rhs_expresion  # Asignar el tipo del dato en memoria
+
+			# Verificar compatibilidad para la asignación: tipo_del_dato_en_memoria = tipo_rhs_expresion
+			# Por ejemplo, si tipo_del_dato_en_memoria es 'int', entonces 'int' = tipo_rhs_expresion
+			tipo_asignacion_resultante = check_binop('=', tipo_del_dato_en_memoria, tipo_rhs_expresion) #
+
+			if tipo_asignacion_resultante is None:
+				print(f"Error: Incompatibilidad de tipos en la asignación a la ubicación de memoria. Se esperaba poder asignar un '{tipo_rhs_expresion}' a una ubicación de tipo '{tipo_del_dato_en_memoria}'.")
+				self.hasErrors = True
+				return # O retornar un tipo de error
+			# El tipo de una expresión de asignación suele ser el tipo del valor asignado,
+			# o 'void' si las asignaciones no son expresiones.
+			return tipo_asignacion_resultante
+		# --- Caso para NamedLocation (variables normales) ---
+		# (Tu lógica existente para NamedLocation)
+		elif isinstance(n.location, NamedLocation):
+			loc_symbol = env.get(n.location.name) #
+			if not loc_symbol:
+				print(f"Error: Variable '{n.location.name}' no definida.")
+				self.hasErrors = True
+				return # O tipo de error
+			if isinstance(loc_symbol, Variable) and loc_symbol.is_const: #
+				print(f"Error: La variable '{n.location.name}' es constante (de solo lectura) y no se puede modificar.")
 				self.hasErrors = True
 				return
-
-		type1 = loc.type
-		type2 = n.expression.accept(self, env)
-		expr_type = check_binop('=', type1, type2)
-		if expr_type is None:
-			print(f"Error: Incompatibilidad de tipos en la asignación ({n}): '{type1}' = '{type2}'")
+			tipo_lhs_variable = loc_symbol.type #
+			tipo_rhs_expresion = n.expression.accept(self, env) #
+			tipo_asignacion_resultante = check_binop('=', tipo_lhs_variable, tipo_rhs_expresion) #
+			if tipo_asignacion_resultante is None:
+				line_info = f"en la línea {n.lineno}" if hasattr(n, 'lineno') else ""
+				print(f"Error: Incompatibilidad de tipos en la asignación a la variable '{n.location.name}' {line_info}. Se esperaba '{tipo_lhs_variable}', pero se intentó asignar un valor de tipo '{tipo_rhs_expresion}'.")
+				self.hasErrors = True
+				return
+			return tipo_asignacion_resultante
+		else:
+			# Manejar otros tipos de location si existieran
+			print(f"Error: Tipo de 'location' desconocido en la asignación: {type(n.location).__name__}")
 			self.hasErrors = True
 			return
-		return expr_type
 
 	@visit.register
 	def _(self, n:Print, env:Symtab):
@@ -169,13 +198,19 @@ class Checker():
 		1. Verificar que esta dentro de un ciclo while
 		'''
 		current_env = env
+		in_loop = False
 		while current_env:
-			if current_env.name.startswith("while_body"):
-				return  # Valid usage of Break or Continue
+			# Verificar si el 'owner' de algún entorno padre es un nodo While
+			if current_env.owner and isinstance(current_env.owner, While):
+				in_loop = True
+				break
 			current_env = current_env.parent
-		print(f"Error: La declaración '{type(n).__name__.lower()}' debe estar dentro de un ciclo 'while'.")
-		self.hasErrors = True
-		return
+		
+		if not in_loop:
+			op_name = type(n).__name__.lower()
+			print(f"Error: La declaración '{type(n).__name__.lower()}' debe estar dentro de un ciclo 'while'.")
+			self.hasErrors = True
+		return # break/continue no tienen tipo
 
 	@visit.register
 	def _(self, n:Return, env:Symtab):
@@ -213,6 +248,9 @@ class Checker():
 			return
 		if n.value:
 			value_type = n.value.accept(self, env)
+			if isinstance(n.value, MemoryLocation) and n.value.type == 'void':
+				value_type = n.type
+				n.value.type = value_type
 			if n.type and n.type != value_type:
 				print(f"Error: Incompatibilidad de tipos para la variable '{n.name}': se esperaba {n.type}, se obtuvo {value_type}")
 				self.hasErrors = True
@@ -295,6 +333,13 @@ class Checker():
 		'''
 		type1 = n.left.accept(self, env)
 		type2 = n.right.accept(self, env)
+		# Caso de memoria, dolor de cabeza
+		if isinstance(n.left, MemoryLocation):
+			type1 = type2
+			n.left.type = type2  # Asignar el tipo de la dereferencia
+		if isinstance(n.right, MemoryLocation):
+			type2 = type1
+			n.right.type = type1
 		expr_type = check_binop(n.operator, type1, type2)
 		if expr_type is None:
 			print(f"Error: Operador '{n.operator}' no es válido para los tipos '{type1}' y '{type2}'")
@@ -380,16 +425,23 @@ class Checker():
 	@visit.register
 	def _(self, n:MemoryLocation, env:Symtab):
 		'''
-		1. Visitar n.address (expression) para validar
-		2. Retornar el tipo de datos
+		1. Visitar n.expr (la expresión que calcula la dirección) para validar que sea 'int'.
+		2. Establecer n.type (el tipo del dato *en* la dirección de memoria).
+		3. Retornar n.type.
 		'''
-		address_type = n.expr.accept(self, env)
-		if address_type != 'int':
-			print(f"Error: La dirección en 'MemoryLocation' debe ser de tipo 'int', se obtuvo '{address_type}'.")
-			self.hasErrors = True
-			return
+		# Visitar la expresión que calcula la dirección (ej. 'base' o 'base + i')
+		# El tipo resultante de esta expresión debe ser 'int' (una dirección).
+		tipo_de_la_expresion_direccion = n.expr.accept(self, env)
 
-		return address_type
+		if tipo_de_la_expresion_direccion != 'int':
+			print(f"Error: La expresión para una dirección de memoria (dentro de '` `') debe ser de tipo 'int', pero se obtuvo '{tipo_de_la_expresion_direccion}'.")
+			self.hasErrors = True
+			return 
+
+		# Asignar el tipo del dato EN la dirección de memoria.
+		n.type = 'void'  
+		# Retornar el tipo del dato al que se accede (el tipo de la dereferencia).
+		return n.type
 
 	@visit.register
 	def _(self, n:Char, env:Symtab):

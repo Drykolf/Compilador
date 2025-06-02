@@ -1,10 +1,16 @@
 # v0.3:
 ### Maquina de Pila:
-
+1. El manejo de memoria es horrible
+2. Se creo un metodo "op_" para cada tipo de instruccion del codigo intermedio
+3. El manejo de ciclos tambien es horrible
+4. los if dentro de un ciclo son un dolor
 ## General:
-1. Se agrego un archivo nuevo de configuracion, para indicar facilmente cuando estamos haciendo pruebas y necesitamos ver mas informacion (debug, imprimir todas las salidas de los analizadores).
+1. Se agrego un archivo nuevo de configuracion, para indicar facilmente cuando estamos haciendo pruebas y necesitamos ver mas informacion (debug, imprimir todas las salidas de los analizadores en archivos).
 2. A todos los analizadores se les agregaron condicionales para que generen un archivo con sus resultados.
 3. Se arreglaron errores ligeros encontrados en algunos de los analizadores.
+4. En el lexer, cuando guardaba flotantes y enteros, los teniamos como "1", o sea, texto, corregimos ese error para que se almacenara como numero
+5. La operacion unaria del !, cambiamos las instrucciones IR que genera
+6. El break y continue no los teniamos bien organizados, cuando estaban dentro de un if dentro del ciclo, generaba problemas.
 
 # v0.2:
 ### Lexer:

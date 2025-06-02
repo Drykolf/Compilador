@@ -394,9 +394,10 @@ class NamedLocation(Node):
         return f'NamedLocation({self.name})'
 
 class MemoryLocation(Node):
-    def __init__(self, expr):
+    def __init__(self, expr, _type='int'):
         self.definition = "Memory"
         self.expr = expr
+        self.type = _type
 
     def __repr__(self):
         return f'Memory({self.expr})'

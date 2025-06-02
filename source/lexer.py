@@ -118,12 +118,12 @@ class Lexer:
             elif text[index].isdigit() or text[index] == '.':  # Literales numericos
                 match = FLOAT_PATTERN.match(text, index)
                 if match:
-                    yield Token("FLOAT", match.group(), lineno)
+                    yield Token("FLOAT", float(match.group()), lineno)
                     index = match.end()
                     continue
                 match = INT_PATTERN.match(text, index)
                 if match:
-                    yield Token("INTEGER", match.group(), lineno)
+                    yield Token("INTEGER", int(match.group()), lineno)
                     index = match.end()
                     continue
             elif text[index] == "'":  # Literales de caracter

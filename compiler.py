@@ -2,6 +2,7 @@ from source.parser import Parser
 from source.checker import Checker
 from source.lexer import Lexer
 from source.ircode import IRCode
+from source.stack_machine import StackMachine
 from rich import print
 import json,os
 
@@ -25,14 +26,6 @@ def read_file(file_path):
     with open(file_path, 'r', encoding='utf-8') as file:
         return file.read()
 
-def main():
-    import sys
-    if len(sys.argv) != 2:
-        print('Uso: python3 check.py <archivo>')
-        sys.exit(1)
-    file = sys.argv[1]
-    compile(file)
-
 def create_output_directory(filePath):
     """Create an output directory based on the file name."""
     fileName = filePath.split('/')[-1].split('\\')[-1].split('.')[0]
@@ -46,27 +39,42 @@ def compile(file):
     debug = CONFIG.get("Debug", False)
     content = read_file(file)# Leer el archivo de entrada
     fileName = create_output_directory(file)  # Crear el directorio de salida si es necesario
-    try:
-        lex = Lexer(fileName)# Crear el analizador lexico
-        fileTokens = lex.tokenize(content)
-        if debug: print(fileTokens)  # Imprimir los tokens si el modo debug está activado
-        parser = Parser(fileTokens,fileName)
-        top = parser.parse()  # Devuelve directamente el AST como un Program -> lista de statements
-        statements = top.stmts  # Convertir a lista de statements
-        if debug: print(statements)  # Imprimir el AST si el modo debug está activado
-        systab = Checker.check(top,fileName)  # Perform semantic checks
-        if debug:systab.print()  # Print the symbol table
-        module = IRCode.gencode(statements, fileName)
-        if debug:module.dump()
-    except Exception as e:
-        print(f"{e}")
+    #try:
+    lex = Lexer(fileName)# Crear el analizador lexico
+    fileTokens = lex.tokenize(content)
+    if debug: print(fileTokens)  # Imprimir los tokens si el modo debug está activado
+    parser = Parser(fileTokens,fileName)
+    top = parser.parse()  # Devuelve directamente el AST como un Program -> lista de statements
+    statements = top.stmts  # Convertir a lista de statements
+    if debug: print(statements)  # Imprimir el AST si el modo debug está activado
+    systab = Checker.check(top,fileName)  # Perform semantic checks
+    if debug:systab.print()  # Print the symbol table
+    module = IRCode.gencode(statements, fileName)
+    if debug:module.dump()
+    vm = StackMachine()
+    vm.load_module(module)  # Cargar el módulo IR en la máquina virtual
+    vm.run()  # Ejecutar el código IR
+   # except Exception as e:
+    #    print(f"{e}")
     
 def debug():
     # Debugging function to check the output of the main function
-    print("[bold green][DEBUG][/bold green] Debugging...")
-    file = 'tests/test.gox'
+    print("[bold yellow][DEBUG][/bold yellow] Debugging...")
+    file = 'tests/prueba12.gox'
+    compile(file)
+
+def main():
+    import sys
+    if len(sys.argv) != 2:
+        print('Uso: python3 check.py <archivo>')
+        sys.exit(1)
+    file = sys.argv[1]
     compile(file)
 
 if __name__ == '__main__':
 	#main()
 	debug()
+
+'''
+problemas en prueba 9
+'''
