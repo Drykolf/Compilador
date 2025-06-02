@@ -41,28 +41,34 @@ def compile(file):
     print(f"[bold green]Compilando {file}...[/bold green]")
     content = read_file(file)# Leer el archivo de entrada
     fileName = create_output_directory(file)  # Crear el directorio de salida si es necesario
-    #try:
-    lex = Lexer(fileName)# Crear el analizador lexico
-    fileTokens = lex.tokenize(content)
-    if debug: print(fileTokens)  # Imprimir los tokens si el modo debug está activado
-    parser = Parser(fileTokens,fileName)
-    top = parser.parse()  # Devuelve directamente el AST como un Program -> lista de statements
-    statements = top.stmts  # Convertir a lista de statements
-    if debug: print(statements)  # Imprimir el AST si el modo debug está activado
-    systab = Checker.check(top,fileName)  # Perform semantic checks
-    if debug:systab.print()  # Print the symbol table
-    module = IRCode.gencode(statements, fileName)
-    if debug:module.dump()
-    vm = StackMachine()
-    vm.load_module(module)  # Cargar el módulo IR en la máquina virtual
-    vm.run()  # Ejecutar el código IR
-   # except Exception as e:
-    #    print(f"{e}")
+    try:
+        lex = Lexer(fileName)# Crear el analizador lexico
+        fileTokens = lex.tokenize(content)
+        if debug: print(fileTokens)  # Imprimir los tokens si el modo debug está activado
+        parser = Parser(fileTokens,fileName)
+        top = parser.parse()  # Devuelve directamente el AST como un Program -> lista de statements
+        statements = top.stmts  # Convertir a lista de statements
+        if debug: print(statements)  # Imprimir el AST si el modo debug está activado
+        systab = Checker.check(top,fileName)  # Perform semantic checks
+        if debug:systab.print()  # Print the symbol table
+        module = IRCode.gencode(statements, fileName)
+        if debug:module.dump()
+        vm = StackMachine()
+        vm.load_module(module)  # Cargar el módulo IR en la máquina virtual
+        vm.run()  # Ejecutar el código IR
+    except Exception as e:
+        print(f"{e}")
     
 def debug():
     # Debugging function to check the output of the main function
-    file = 'tests/test1.gox'
-    compile(file)
+    test_dir = 'tests'
+    if os.path.exists(test_dir):
+        for filename in os.listdir(test_dir):
+            if filename.endswith('.gox'):
+                file_path = os.path.join(test_dir, filename)
+                compile(file_path)
+    else:
+        print(f"Directory {test_dir} not found")
 
 def main():
     import sys
@@ -74,4 +80,5 @@ def main():
 
 if __name__ == '__main__':
 	#main()
-	debug()
+	#debug()
+    compile('./tests/test1.gox')  # Example file to compile
