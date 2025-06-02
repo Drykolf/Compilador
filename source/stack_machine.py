@@ -388,7 +388,6 @@ class StackMachine:
         self.globals[name] = (value, val_type)
 
     # --- Funciones y retorno ---
-    # In class StackMachine:
     def op_CALL(self, func_name, is_initial_call=False):
         if func_name not in self.functions:
             raise NameError(f"Function '{func_name}' not defined.")
@@ -400,9 +399,6 @@ class StackMachine:
             # self.pc_modified_by_operation = False # Or True if it behaves like a jump
             self._log_debug(f"CALL: Imported function '{func_name}' handled.") # Minor log change
             return
-
-
-        # ... (existing code for new_locals, argument passing) ...
         # Argument passing should be before saving caller's state if args are on stack
         new_locals = {}
         for local_name, local_ir_type in func_def['locals_spec'].items():
@@ -435,15 +431,12 @@ class StackMachine:
         self.pc_modified_by_operation = True
         self._log_debug(f"CALL: Jumping to {func_name}. New PC=0. Locals frame created. Program instructions loaded for {func_name}.")
 
-    # In class StackMachine:
     def op_RET(self):
-        # ... (existing code for popping locals_stack) ...
         if not self.locals_stack: # This check should be after ensuring there is a scope to pop
              if not (self.current_function_name == 'main' and not self.call_stack): # Main might not have locals if empty
                  raise RuntimeError("RET: Locals stack is empty, cannot restore  (or was already popped).")
         else:
             self.locals_stack.pop()
-
 
         if not self.call_stack: # Returning from 'main'
             self._log_debug(f"RET: No call stack frame. Assuming return from '{self.current_function_name_or_none()}' or initial context. Halting.")
